@@ -70,9 +70,9 @@ const zero = new Uint8Array(8);
 const owned = (bytes) => new Uint8Array(bytes);
 const same = (a, b) =>
 	a.length === b.length && a.every((value, i) => value === b[i]);
-const startOf = (time) => Number(time - (time % BigInt(task.timePrecision)));
 function bucket(time) {
-	const start = startOf(time);
+	// DAP report times are already expressed in time-precision units.
+	const start = Number(time);
 	sql.ensureBucket.run(start, zero, 0, 0);
 	return sql.bucket.get(start);
 }
@@ -326,7 +326,7 @@ async function leaderUpload(request, response) {
 function collect(request, response, url) {
 	authenticated(request);
 	const start = Number(url.searchParams.get("start"));
-	if (!Number.isSafeInteger(start) || start < 0 || start % task.timePrecision)
+	if (!Number.isSafeInteger(start) || start < 0)
 		throw new HttpError(400, "Invalid bucket start");
 	const result = transaction(() => {
 		const row = bucket(BigInt(start));

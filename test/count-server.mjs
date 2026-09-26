@@ -172,7 +172,7 @@ try {
 		new Uint8Array(await storedJob.arrayBuffer()),
 		new Uint8Array(await retriedJob.arrayBuffer()),
 	);
-	const startTime = prepared.time - (prepared.time % task.timePrecision);
+	const startTime = prepared.time;
 	const parts = [];
 	for (const port of [leaderPort, helperPort]) {
 		const response = await fetch(
@@ -191,8 +191,25 @@ try {
 		Uint8Array.fromHex(parts[1].share),
 	);
 	assert.equal(new DataView(total.buffer).getBigUint64(0, true), 1n);
+	const prior = client.prepareUpload([
+		await client.prepareReport(1, { time: Date.now() - 60_000 }),
+	]);
+	const priorReply = await fetch(target, {
+		method: "POST",
+		headers: prior.request.headers,
+		body: prior.request.body,
+	});
+	assert.equal(priorReply.status, 200, await priorReply.clone().text());
+	assert.equal(
+		prior.process({
+			status: priorReply.status,
+			headers: Object.fromEntries(priorReply.headers),
+			body: new Uint8Array(await priorReply.arrayBuffer()),
+		}).accepted.length,
+		1,
+	);
 	console.log(
-		"Count report committed once after Leader restart and collected from both stores",
+		"Count report committed once after Leader restart; adjacent bucket stays open",
 	);
 	await stop(leader);
 	await stop(helper);

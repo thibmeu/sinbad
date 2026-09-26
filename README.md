@@ -78,6 +78,7 @@ and HPKE key. It accepts one Count report per upload, saves the exact
 aggregation request, and commits each verified share once. A retry after a
 lost response returns the saved bytes. This example has an internal bucket
 collection endpoint; it does not implement DAP collection jobs.
+The collection `start` parameter is a DAP time-precision unit, not Unix seconds.
 
 Build the sibling package, install Sinbad, and start both roles:
 
@@ -98,6 +99,11 @@ Run `npm run test:count-server` to exercise a lost Helper response across a
 Leader restart and verify that both buckets contain one contribution. The
 test uses temporary SQLite files and loopback ports. Stop the Compose example
 with `docker compose -f compose.count.yaml down`; add `-v` to discard its data.
+
+With both roles running, `npm run bench:count -- sinbad 500 10` measures 500
+prepared Count uploads at concurrency 10. It checks the stored bucket counts
+and reports upload latency, verified throughput, container CPU time, and peak
+memory. Set `BENCH_MINUTES_AGO` to use a different minute for another run.
 
 ## License
 

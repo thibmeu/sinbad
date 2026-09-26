@@ -29,12 +29,13 @@
     "build": "tsc",
     "prepare": "npm run build",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
-    "lint": "biome check src test server",
-    "format": "biome format --write src test",
+    "lint": "biome check src test server bench",
+    "format": "biome format --write src test server bench",
     "build:demo": "npm run build && esbuild demo/app.js --bundle --format=esm --outfile=demo/app.bundle.js",
     "demo": "npm run build:demo && node demo/server.js",
     "test": "vitest run",
-    "test:count-server": "node test/count-server.mjs"
+    "test:count-server": "node test/count-server.mjs",
+    "bench:count": "node bench/count.mjs"
   },
   "peerDependencies": {
     "dap-ts": "*"
