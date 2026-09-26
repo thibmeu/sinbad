@@ -208,8 +208,43 @@ try {
 		}).accepted.length,
 		1,
 	);
+	const batchTime = Date.now() - 120_000;
+	const batch = client.prepareUpload([
+		await client.prepareReport(1, { time: batchTime }),
+		await client.prepareReport(1, { time: Date.now() + 10 * 60_000 }),
+		await client.prepareReport(1, { time: batchTime }),
+	]);
+	const batchReply = await fetch(target, {
+		method: "POST",
+		headers: batch.request.headers,
+		body: batch.request.body,
+	});
+	assert.equal(batchReply.status, 200, await batchReply.clone().text());
+	const batchBody = new Uint8Array(await batchReply.arrayBuffer());
+	const batchResult = batch.process({
+		status: batchReply.status,
+		headers: Object.fromEntries(batchReply.headers),
+		body: batchBody,
+	});
+	assert.equal(batchResult.accepted.length, 2);
+	assert.equal(batchResult.rejected[0]?.rawCode, 8);
+	const batchRetry = await fetch(target, {
+		method: "POST",
+		headers: batch.request.headers,
+		body: batch.request.body,
+	});
+	assert.equal(batchRetry.status, 200);
+	assert.deepEqual(new Uint8Array(await batchRetry.arrayBuffer()), batchBody);
+	for (const port of [leaderPort, helperPort]) {
+		const collected = await fetch(
+			`http://127.0.0.1:${port}/internal/collect?start=${Math.floor(batchTime / 60_000)}`,
+			{ method: "POST", headers: { authorization: `Bearer ${token}` } },
+		);
+		assert.equal(collected.status, 200, await collected.clone().text());
+		assert.equal((await collected.json()).reportCount, 2);
+	}
 	console.log(
-		"Count report committed once after Leader restart; adjacent bucket stays open",
+		"Count retries and mixed batches commit each accepted report once",
 	);
 	await stop(leader);
 	await stop(helper);

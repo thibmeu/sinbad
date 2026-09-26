@@ -74,8 +74,8 @@ The demo reports accepted uploads. Collection and display of aggregate totals ar
 ## DAP 19 Count server example
 
 `server/count.js` runs as a leader or helper. Each role has its own SQLite file
-and HPKE key. It accepts one Count report per upload, saves the exact
-aggregation request, and commits each verified share once. A retry after a
+and HPKE key. It puts the Count reports in each upload into one aggregation job,
+saves the exact request, and commits each verified share once. A retry after a
 lost response returns the saved bytes. This example has an internal bucket
 collection endpoint; it does not implement DAP collection jobs.
 The collection `start` parameter is a DAP time-precision unit, not Unix seconds.
@@ -96,12 +96,12 @@ fixed HTTPS names for local testing, so the caller routes requests to the
 loopback ports. The Compose token and verification key are fixed test values.
 
 Run `npm run test:count-server` to exercise a lost Helper response across a
-Leader restart and verify that both buckets contain one contribution. The
+Leader restart, a mixed batch, and exact retries. The
 test uses temporary SQLite files and loopback ports. Stop the Compose example
 with `docker compose -f compose.count.yaml down`; add `-v` to discard its data.
 
-With both roles running, `npm run bench:count -- sinbad 500 10` measures 500
-prepared Count uploads at concurrency 10. It checks the stored bucket counts
+With both roles running, `npm run bench:count -- sinbad 500 10 50` measures 500
+prepared Count reports in 10 uploads of 50 at concurrency 10. It checks the stored bucket counts
 and reports upload latency, verified throughput, container CPU time, and peak
 memory. Set `BENCH_MINUTES_AGO` to use a different minute for another run.
 

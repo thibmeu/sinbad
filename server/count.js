@@ -1,16 +1,16 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { createServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
-import { DAPError, prio3Count, Task } from "dap-ts";
+import { prio3Count, Task } from "dap-ts";
 import {
 	addCountOutputShare,
 	encodeCountJobRejection,
-	helperCountJobInit,
-	leaderCountJobFinish,
-	leaderCountJobInit,
+	helperCountBatchInit,
+	leaderCountBatchFinish,
+	leaderCountBatchInit,
 	prepareAggregatorKey,
 } from "dap-ts/aggregator";
-import { decodeReport, encodeHpkeConfigList } from "dap-ts/messages";
+import { decodeUploadRequest, encodeHpkeConfigList } from "dap-ts/messages";
 
 const role = process.env.ROLE;
 if (role !== "leader" && role !== "helper")
@@ -39,15 +39,22 @@ const task = Task.create({
 const db = new DatabaseSync(process.env.DATA_FILE ?? `${role}.sqlite`);
 db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
 CREATE TABLE IF NOT EXISTS meta (name TEXT PRIMARY KEY, value BLOB NOT NULL);
-CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, request BLOB NOT NULL, state BLOB, report_id BLOB NOT NULL, time INTEGER NOT NULL, upload BLOB, response BLOB, upload_response BLOB);
+CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, request BLOB NOT NULL, state BLOB, report_id BLOB NOT NULL, time INTEGER NOT NULL, upload BLOB, response BLOB, upload_response BLOB, initial_errors BLOB);
 CREATE TABLE IF NOT EXISTS reports (id BLOB PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS buckets (start INTEGER PRIMARY KEY, share BLOB NOT NULL, count INTEGER NOT NULL, pending INTEGER NOT NULL, collected INTEGER NOT NULL);`);
+if (
+	!db
+		.prepare("PRAGMA table_info(jobs)")
+		.all()
+		.some((column) => column.name === "initial_errors")
+)
+	db.exec("ALTER TABLE jobs ADD COLUMN initial_errors BLOB");
 const sql = {
 	meta: db.prepare("SELECT value FROM meta WHERE name=?"),
 	putMeta: db.prepare("INSERT INTO meta(name,value) VALUES (?,?)"),
 	job: db.prepare("SELECT * FROM jobs WHERE id=?"),
 	leaderJob: db.prepare(
-		"INSERT INTO jobs(id,request,state,report_id,time,upload) VALUES (?,?,?,?,?,?)",
+		"INSERT INTO jobs(id,request,state,report_id,time,upload,initial_errors) VALUES (?,?,?,?,?,?,?)",
 	),
 	helperJob: db.prepare(
 		"INSERT INTO jobs(id,request,report_id,time,response) VALUES (?,?,?,?,?)",
@@ -179,25 +186,34 @@ async function helperJob(request, response) {
 		);
 		return;
 	}
-	const result = await helperCountJobInit(task, body, key, 0, verifyKey);
+	const result = await helperCountBatchInit(task, body, key, 0, verifyKey);
 	const outbound = transaction(() => {
 		const prior = sql.job.get(jobId);
-		if (prior) {
-			return owned(prior.response);
-		}
-		const row = bucket(result.time);
-		let value = result.response;
-		if (result.outputShare) {
-			if (sql.report.get(result.reportId))
-				value = encodeCountJobRejection(result.reportId, 2);
-			else if (row.collected)
-				value = encodeCountJobRejection(result.reportId, 1);
-			else {
-				sql.claim.run(result.reportId);
-				add(row, result.outputShare);
+		if (prior) return owned(prior.response);
+		const responses = [];
+		for (const report of result.reports) {
+			let value = report.response;
+			if (report.outputShare) {
+				const row = bucket(report.time);
+				if (sql.report.get(report.reportId))
+					value = encodeCountJobRejection(report.reportId, 2);
+				else if (row.collected)
+					value = encodeCountJobRejection(report.reportId, 1);
+				else {
+					sql.claim.run(report.reportId);
+					add(row, report.outputShare);
+				}
 			}
+			responses.push(value);
 		}
-		sql.helperJob.run(jobId, body, result.reportId, Number(result.time), value);
+		const value = Buffer.concat(responses);
+		sql.helperJob.run(
+			jobId,
+			body,
+			result.reports[0].reportId,
+			Number(result.reports[0].time),
+			value,
+		);
 		return value;
 	});
 	if (Number(process.env.RESPONSE_DELAY_MS) > 0)
@@ -213,39 +229,64 @@ async function helperJob(request, response) {
 	);
 }
 
+const reportErrorCodes = {
+	ReportTooEarly: 8,
+	ReportDropped: 3,
+	InvalidReport: 7,
+	InvalidHpkeConfig: 4,
+	DecryptionFailed: 5,
+};
+
 async function leaderUpload(request, response) {
 	media(request, "upload-req");
 	const body = await readBody(request);
-	const report = decodeReport(body);
-	const jobId = report.metadata.id.toHex();
+	const reports = decodeUploadRequest(body);
+	const ids = reports.map((report) => report.metadata.id.toHex());
+	if (new Set(ids).size !== ids.length)
+		throw new HttpError(400, "Duplicate report ID in upload");
+	const jobId =
+		reports.length === 1
+			? ids[0]
+			: createHash("sha256").update(body).digest("hex");
 	let saved = sql.job.get(jobId);
 	if (saved && !same(saved.upload, body)) {
 		send(
 			response,
 			200,
-			uploadError(report.metadata.id, 2),
+			uploadError(reports[0].metadata.id, 2),
 			"application/ppm-dap;message=upload-errors",
 		);
 		return;
 	}
 	if (!saved) {
-		let job;
-		try {
-			job = await leaderCountJobInit(task, report, key, 0, verifyKey);
-		} catch (error) {
-			if (!(error instanceof DAPError)) throw error;
-			const code = {
-				ReportTooEarly: 8,
-				ReportDropped: 3,
-				InvalidReport: 7,
-				InvalidHpkeConfig: 4,
-				DecryptionFailed: 5,
-			}[error.code];
-			if (!code) throw error;
+		const errors = new Map();
+		const candidates = [];
+		for (const report of reports) {
+			const id = report.metadata.id.toHex();
+			const row = sql.bucket.get(Number(report.metadata.time));
+			if (sql.report.get(report.metadata.id)) errors.set(id, 2);
+			else if (row?.collected) errors.set(id, 1);
+			else candidates.push(report);
+		}
+		const job = candidates.length
+			? await leaderCountBatchInit(task, candidates, key, 0, verifyKey)
+			: { reports: [], rejected: [] };
+		for (const rejected of job.rejected) {
+			const code = reportErrorCodes[rejected.error.code];
+			if (!code) throw rejected.error;
+			errors.set(rejected.reportId.toHex(), code);
+		}
+		const initialErrors = Buffer.concat(
+			reports.flatMap((report) => {
+				const code = errors.get(report.metadata.id.toHex());
+				return code ? [uploadError(report.metadata.id, code)] : [];
+			}),
+		);
+		if (!job.reports.length) {
 			send(
 				response,
 				200,
-				uploadError(report.metadata.id, code),
+				initialErrors,
 				"application/ppm-dap;message=upload-errors",
 			);
 			return;
@@ -257,17 +298,20 @@ async function leaderUpload(request, response) {
 					throw new HttpError(409, "Job ID conflict");
 				return;
 			}
-			const row = bucket(job.time);
-			if (sql.report.get(job.reportId) || row.collected)
-				throw new HttpError(409, "Report replayed or bucket collected");
-			sql.updateBucket.run(row.share, row.count, row.pending + 1, row.start);
+			for (const report of job.reports) {
+				const row = bucket(report.time);
+				if (sql.report.get(report.reportId) || row.collected)
+					throw new HttpError(409, "Report replayed or bucket collected");
+				sql.updateBucket.run(row.share, row.count, row.pending + 1, row.start);
+			}
 			sql.leaderJob.run(
 				jobId,
 				job.request,
-				job.state,
-				job.reportId,
-				Number(job.time),
+				Buffer.concat(job.reports.map((report) => report.state)),
+				Buffer.concat(job.reports.map((report) => report.reportId)),
+				Number(job.reports[0].time),
 				body,
+				initialErrors,
 			);
 		});
 		saved = sql.job.get(jobId);
@@ -294,11 +338,19 @@ async function leaderUpload(request, response) {
 	);
 	if (!peer.ok) throw new HttpError(502, `Helper returned ${peer.status}`);
 	const inbound = new Uint8Array(await peer.arrayBuffer());
-	const result = leaderCountJobFinish(
-		owned(saved.state),
-		owned(saved.report_id),
-		inbound,
+	const times = new Map(
+		reports.map((report) => [report.metadata.id.toHex(), report.metadata.time]),
 	);
+	const states = [];
+	for (let offset = 0; offset < saved.report_id.length; offset += 16) {
+		const reportId = owned(saved.report_id.subarray(offset, offset + 16));
+		states.push({
+			reportId,
+			time: times.get(reportId.toHex()),
+			state: owned(saved.state.subarray(offset / 2, offset / 2 + 8)),
+		});
+	}
+	const results = leaderCountBatchFinish(states, inbound);
 	const outbound = transaction(() => {
 		const current = sql.job.get(jobId);
 		if (current.upload_response) {
@@ -306,17 +358,34 @@ async function leaderUpload(request, response) {
 				throw new HttpError(409, "Helper response changed");
 			return owned(current.upload_response);
 		}
-		const row = bucket(BigInt(current.time));
-		let value = new Uint8Array();
-		if ("outputShare" in result) {
-			if (sql.report.get(current.report_id) || row.collected)
-				throw new HttpError(409, "Report cannot be committed");
-			sql.claim.run(current.report_id);
-			add(row, result.outputShare, row.pending - 1);
-		} else {
-			value = uploadError(owned(current.report_id), result.reportError);
-			sql.updateBucket.run(row.share, row.count, row.pending - 1, row.start);
+		const errors = new Map();
+		for (
+			let offset = 0;
+			offset < (current.initial_errors?.length ?? 0);
+			offset += 17
+		)
+			errors.set(
+				current.initial_errors.subarray(offset, offset + 16).toHex(),
+				current.initial_errors[offset + 16],
+			);
+		for (const result of results) {
+			const row = bucket(result.time);
+			if ("outputShare" in result) {
+				if (sql.report.get(result.reportId) || row.collected)
+					throw new HttpError(409, "Report cannot be committed");
+				sql.claim.run(result.reportId);
+				add(row, result.outputShare, row.pending - 1);
+			} else {
+				errors.set(result.reportId.toHex(), result.reportError);
+				sql.updateBucket.run(row.share, row.count, row.pending - 1, row.start);
+			}
 		}
+		const value = Buffer.concat(
+			reports.flatMap((report) => {
+				const code = errors.get(report.metadata.id.toHex());
+				return code ? [uploadError(report.metadata.id, code)] : [];
+			}),
+		);
 		sql.finish.run(inbound, value, jobId);
 		return value;
 	});

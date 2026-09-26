@@ -7,15 +7,18 @@ import { DAPClient, HpkeConfigList, prio3Count, Task } from "dap-ts";
 const mode = process.argv[2];
 const count = Number(process.argv[3] ?? 200);
 const concurrency = Number(process.argv[4] ?? 10);
+const batchSize = Number(process.argv[5] ?? 1);
 if (
 	!["sinbad", "janus"].includes(mode) ||
 	!Number.isSafeInteger(count) ||
 	count < 1 ||
 	!Number.isSafeInteger(concurrency) ||
-	concurrency < 1
+	concurrency < 1 ||
+	!Number.isSafeInteger(batchSize) ||
+	batchSize < 1
 )
 	throw new Error(
-		"Usage: node bench/count.mjs sinbad|janus [count] [concurrency]",
+		"Usage: node bench/count.mjs sinbad|janus [count] [concurrency] [batchSize]",
 	);
 
 const ports = mode === "sinbad" ? [9011, 9012] : [9001, 9002];
@@ -162,19 +165,23 @@ if (!Number.isSafeInteger(minutesAgo) || minutesAgo < 1)
 	throw new Error("BENCH_MINUTES_AGO must be a positive integer");
 const time = Math.floor((Date.now() - minutesAgo * 60_000) / 60_000) * 60_000;
 const uploads = [];
-for (let i = 0; i < count; i++)
-	uploads.push(client.prepareUpload([await client.prepareReport(1, { time })]));
+for (let i = 0; i < count; i += batchSize) {
+	const reports = [];
+	for (let j = i; j < Math.min(i + batchSize, count); j++)
+		reports.push(await client.prepareReport(1, { time }));
+	uploads.push(client.prepareUpload(reports));
+}
 const janusStartingCount =
 	mode === "janus" ? [finishedJanus(0), finishedJanus(1)] : [0, 0];
 const before = containers.map(sample);
-const latencies = new Array(count);
+const latencies = new Array(uploads.length);
 let next = 0;
 const started = performance.now();
 await Promise.all(
-	Array.from({ length: Math.min(count, concurrency) }, async () => {
+	Array.from({ length: Math.min(uploads.length, concurrency) }, async () => {
 		for (;;) {
 			const index = next++;
-			if (index >= count) break;
+			if (index >= uploads.length) break;
 			const upload = uploads[index];
 			const at = performance.now();
 			const response = await fetch(endpoint(0, `tasks/${task.id}/reports`), {
@@ -189,7 +196,7 @@ await Promise.all(
 			});
 			assert.equal(
 				outcome.accepted.length,
-				1,
+				Math.min(batchSize, count - index * batchSize),
 				JSON.stringify(outcome.rejected),
 			);
 			latencies[index] = performance.now() - at;
@@ -233,6 +240,7 @@ console.log(
 			mode,
 			count,
 			concurrency,
+			batchSize,
 			cpu: cpus()[0]?.model,
 			node: process.version,
 			linux: execFileSync("uname", ["-r"], { encoding: "utf8" }).trim(),
@@ -241,8 +249,11 @@ console.log(
 				["inspect", "--format", "{{.Config.Image}}", containers[0]],
 				{ encoding: "utf8" },
 			).trim(),
-			uploadP50Ms: latencies[Math.floor(count * 0.5)],
-			uploadP95Ms: latencies[Math.min(count - 1, Math.floor(count * 0.95))],
+			uploadP50Ms: latencies[Math.floor(uploads.length * 0.5)],
+			uploadP95Ms:
+				latencies[
+					Math.min(uploads.length - 1, Math.floor(uploads.length * 0.95))
+				],
 			uploadReportsPerSecond: (count * 1000) / (uploadsDone - started),
 			verifiedReportsPerSecond: (count * 1000) / (completed - started),
 			roles: containers.map((name, i) => ({
