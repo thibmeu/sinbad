@@ -1,0 +1,19 @@
+services:
+  leader:
+    image: sinbad-janus:64e2581
+    build:
+      context: ${JANUS_SOURCE:?Run scripts/up.sh}
+      dockerfile: Dockerfile.interop_aggregator
+      args:
+        PROFILE: ci
+    ports:
+      - "127.0.0.1:9001:8080"
+  helper:
+    image: sinbad-janus:64e2581
+    build:
+      context: ${JANUS_SOURCE:?Run scripts/up.sh}
+      dockerfile: Dockerfile.interop_aggregator
+      args:
+        PROFILE: ci
+    ports:
+      - "127.0.0.1:9002:8080"

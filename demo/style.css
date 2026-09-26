@@ -1,0 +1,4 @@
+body { font: 1rem/1.5 system-ui, sans-serif; max-width: 36rem; margin: 4rem auto; padding: 0 1rem; color: #17212b; }
+button { font: inherit; padding: .5rem .8rem; cursor: pointer; }
+button:disabled { cursor: wait; }
+#status { min-height: 1.5rem; }
