@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { prio3Count, Task } from "dap-ts";
 import { fetchHpkeConfigs } from "sinbad/fetch";
+import { Effect } from "effect";
 
 const origin = process.env.PUBLIC_ORIGIN ?? "http://localhost:8080";
 const leaderUrl = process.env.LEADER_URL ?? "http://127.0.0.1:9001/";
@@ -66,7 +67,7 @@ async function provision() {
   let hpke;
   for (let attempt = 0; attempt < 60; attempt++) {
     try {
-      hpke = await fetchHpkeConfigs(task, { fetch: internalFetch });
+      hpke = await Effect.runPromise(fetchHpkeConfigs(task, { fetch: internalFetch }));
       break;
     } catch (error) {
       if (attempt === 59) throw error;

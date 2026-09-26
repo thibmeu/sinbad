@@ -5,6 +5,7 @@ A small analytics library and Fetch transport for [dap-ts](https://github.com/th
 ```js
 import { prio3Count, Task } from "dap-ts";
 import { createCounter } from "sinbad";
+import { Effect } from "effect";
 
 const task = Task.create({
   id: "8BY0RzZMzxvA46_8ymhzycOB9krN-QIGYvg_RsByGec",
@@ -16,18 +17,18 @@ const task = Task.create({
   batchMode: "time-interval",
   vdaf: prio3Count(),
 });
-const count = await createCounter(task);
-const result = await count();
+const count = await Effect.runPromise(createCounter(task));
+const result = await Effect.runPromise(count());
 if (!result.ok) console.warn(result.rejected);
 ```
 
-The task must already be provisioned on both aggregators. Each call sends one Prio3Count measurement with value `1`. `createCounter` fetches the leader and helper HPKE configurations once. It accepts a custom `fetch`, request `headers`, and an abort `signal`. It returns dap-ts's upload result.
+The task must already be provisioned on both aggregators. Each call sends one Prio3Count measurement with value `1`. `createCounter` fetches the leader and helper HPKE configurations once. It accepts a custom `fetch`, request `headers`, and an abort `signal`. It returns an Effect whose counter returns an Effect of dap-ts's upload result. Effects are lazy; run them at the application edge with `Effect.runPromise` or compose them with other Effects.
 
 ## Fetch transport
 
 `sinbad/fetch` exports `fetchHpkeConfigs(task)`, `execute(preparedUpload)`,
 `toRequest()`, and `fromResponse()`. The first two accept a custom Fetch
-implementation, headers, and an abort signal. `execute()` sends an existing
+implementation, headers, and an abort signal. All async operations return Effects. `execute()` sends an existing
 upload once; callers decide whether to retry it.
 
 `sinbad/collector` exports `collect(collector, queryOrState)` and
@@ -37,11 +38,12 @@ collector private key belong on a backend:
 ```js
 import { Collector } from "dap-ts/collector";
 import { collect } from "sinbad/collector";
+import { Effect } from "effect";
 
 const collector = new Collector(task, { configId, privateKey });
-const progress = await collect(collector, { start: batchStart, duration: 1 }, {
+const progress = await Effect.runPromise(collect(collector, { start: batchStart, duration: 1 }, {
   headers: { authorization: `Bearer ${collectorToken}` },
-});
+}));
 if (progress.status === "pending") saveForLater(progress.state);
 else console.log(progress.count ?? progress.sum);
 ```

@@ -1,4 +1,5 @@
 import type { Collector, PreparedCollection } from "dap-ts/collector";
+import { Effect } from "effect";
 import { expect, it, vi } from "vitest";
 import { collect, executeCollection } from "../src/collector.js";
 
@@ -28,15 +29,17 @@ it("polls with authentication and returns resumable state at the limit", async (
 		expect(request.headers.get("authorization")).toBe("Bearer test");
 		return new Response(null, { status: 200 });
 	});
-	const result = await collect(
-		collector,
-		{ start: 10, duration: 2 },
-		{
-			fetch,
-			headers: { authorization: "Bearer test" },
-			maxPolls: 2,
-			minDelayMs: 0,
-		},
+	const result = await Effect.runPromise(
+		collect(
+			collector,
+			{ start: 10, duration: 2 },
+			{
+				fetch,
+				headers: { authorization: "Bearer test" },
+				maxPolls: 2,
+				minDelayMs: 0,
+			},
+		),
 	);
 	expect(result.status).toBe("pending");
 	expect(fetch.mock.calls.map(([request]) => request.method)).toEqual([
@@ -45,10 +48,12 @@ it("polls with authentication and returns resumable state at the limit", async (
 		"GET",
 	]);
 	if (result.status !== "pending") return;
-	await executeCollection(collector.resume(result.state), {
-		fetch,
-		headers: { authorization: "Bearer test" },
-	});
+	await Effect.runPromise(
+		executeCollection(collector.resume(result.state), {
+			fetch,
+			headers: { authorization: "Bearer test" },
+		}),
+	);
 	expect(fetch).toHaveBeenCalledTimes(4);
 });
 
@@ -59,13 +64,15 @@ it("stops polling on cancellation and long Retry-After", async () => {
 		return new Response(null, { status: 200 });
 	});
 	await expect(
-		collect(
-			collector,
-			{ start: 10, duration: 2 },
-			{
-				fetch: abortingFetch,
-				signal: controller.signal,
-			},
+		Effect.runPromise(
+			collect(
+				collector,
+				{ start: 10, duration: 2 },
+				{
+					fetch: abortingFetch,
+					signal: controller.signal,
+				},
+			),
 		),
 	).rejects.toThrow();
 	expect(abortingFetch).toHaveBeenCalledTimes(1);
@@ -82,7 +89,11 @@ it("stops polling on cancellation and long Retry-After", async () => {
 	} as Collector;
 	const fetch = vi.fn(async () => new Response(null, { status: 200 }));
 	expect(
-		(await collect(slow, { start: 10, duration: 2 }, { fetch })).status,
+		(
+			await Effect.runPromise(
+				collect(slow, { start: 10, duration: 2 }, { fetch }),
+			)
+		).status,
 	).toBe("pending");
 	expect(fetch).toHaveBeenCalledTimes(1);
 });

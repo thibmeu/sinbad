@@ -9,6 +9,10 @@ import {
 	type Task,
 	type UploadResult,
 } from "dap-ts";
+import { Effect } from "effect";
+
+export const asError = (cause: unknown): Error =>
+	cause instanceof Error ? cause : new Error(String(cause));
 
 function resource(base: string, path: string): string {
 	return `${base.endsWith("/") ? base : `${base}/`}${path}`;
@@ -49,92 +53,137 @@ export function toRequest(
 	});
 }
 
-export async function fromResponse(
+export function fromResponse(
 	response: Response,
 	options: Pick<FetchOptions, "maxResponseSize"> = {},
-): Promise<DAPResponse> {
-	const limit = options.maxResponseSize ?? 1024 * 1024;
-	if (!Number.isSafeInteger(limit) || limit < 0)
-		throw new DAPError("InvalidResponse", "Invalid response size limit");
-	const chunks: Uint8Array[] = [];
-	let size = 0;
-	const reader = response.body?.getReader();
-	if (reader) {
-		try {
-			while (true) {
-				const next = await reader.read();
-				if (next.done) break;
-				size += next.value.length;
-				if (size > limit) {
-					await reader.cancel();
-					throw new DAPError(
-						"InvalidResponse",
-						"Response exceeds the size limit",
-					);
+): Effect.Effect<DAPResponse, Error> {
+	return Effect.tryPromise({
+		try: async () => {
+			const limit = options.maxResponseSize ?? 1024 * 1024;
+			if (!Number.isSafeInteger(limit) || limit < 0)
+				throw new DAPError("InvalidResponse", "Invalid response size limit");
+			const chunks: Uint8Array[] = [];
+			let size = 0;
+			const reader = response.body?.getReader();
+			if (reader) {
+				try {
+					while (true) {
+						const next = await reader.read();
+						if (next.done) break;
+						size += next.value.length;
+						if (size > limit) {
+							await reader.cancel();
+							throw new DAPError(
+								"InvalidResponse",
+								"Response exceeds the size limit",
+							);
+						}
+						chunks.push(next.value.slice());
+					}
+				} finally {
+					reader.releaseLock();
 				}
-				chunks.push(next.value.slice());
 			}
-		} finally {
-			reader.releaseLock();
-		}
-	}
-	const body = new Uint8Array(size);
-	let offset = 0;
-	for (const chunk of chunks) {
-		body.set(chunk, offset);
-		offset += chunk.length;
-	}
-	return {
-		status: response.status,
-		headers: Object.fromEntries(response.headers),
-		body,
-	};
+			const body = new Uint8Array(size);
+			let offset = 0;
+			for (const chunk of chunks) {
+				body.set(chunk, offset);
+				offset += chunk.length;
+			}
+			return {
+				status: response.status,
+				headers: Object.fromEntries(response.headers),
+				body,
+			};
+		},
+		catch: asError,
+	});
 }
 
 /** Send an existing upload once. Authentication and retries belong to the caller. */
-export async function execute(
+export function execute(
 	upload: PreparedUpload,
 	options: FetchOptions = {},
-): Promise<UploadResult> {
-	options.signal?.throwIfAborted();
-	const request = toRequest(upload.request, options);
-	const response = await (options.fetch ?? globalThis.fetch)(request);
-	const data = await fromResponse(response, options);
-	options.signal?.throwIfAborted();
-	return upload.process(data);
+): Effect.Effect<UploadResult, Error> {
+	return Effect.gen(function* () {
+		const response = yield* Effect.tryPromise({
+			try: (signal) => {
+				options.signal?.throwIfAborted();
+				const request = toRequest(upload.request, {
+					...options,
+					signal: options.signal
+						? AbortSignal.any([options.signal, signal])
+						: signal,
+				});
+				return (options.fetch ?? globalThis.fetch)(request);
+			},
+			catch: asError,
+		});
+		const data = yield* fromResponse(response, options);
+		return yield* Effect.try({
+			try: () => {
+				options.signal?.throwIfAborted();
+				return upload.process(data);
+			},
+			catch: asError,
+		});
+	});
 }
 
 /** Retrieve both lists explicitly; retain every advertised suite for inspection. */
-export async function fetchHpkeConfigs(
+export function fetchHpkeConfigs(
 	task: Task<unknown>,
 	options: FetchOptions = {},
-): Promise<AggregatorHpkeConfigs> {
-	options.signal?.throwIfAborted();
-	const get = async (base: string): Promise<HpkeConfigList> => {
-		const request = toRequest(
-			{
-				method: "GET",
-				url: resource(base, "hpke_config"),
-				headers: { accept: "application/ppm-dap;message=hpke-config-list" },
-			},
-			options,
-		);
-		const response = await (options.fetch ?? globalThis.fetch)(request);
-		const data = await fromResponse(response, {
-			maxResponseSize: Math.min(options.maxResponseSize ?? 65537, 65537),
+): Effect.Effect<AggregatorHpkeConfigs, Error> {
+	const get = (base: string): Effect.Effect<HpkeConfigList, Error> =>
+		Effect.gen(function* () {
+			const response = yield* Effect.tryPromise({
+				try: (signal) =>
+					(options.fetch ?? globalThis.fetch)(
+						toRequest(
+							{
+								method: "GET",
+								url: resource(base, "hpke_config"),
+								headers: {
+									accept: "application/ppm-dap;message=hpke-config-list",
+								},
+							},
+							{
+								...options,
+								signal: options.signal
+									? AbortSignal.any([options.signal, signal])
+									: signal,
+							},
+						),
+					),
+				catch: asError,
+			});
+			const data = yield* fromResponse(response, {
+				maxResponseSize: Math.min(options.maxResponseSize ?? 65537, 65537),
+			});
+			return yield* Effect.try({
+				try: () => {
+					options.signal?.throwIfAborted();
+					if (data.status < 200 || data.status >= 300)
+						throw new DAPError(
+							"HttpError",
+							`HPKE config request failed with HTTP ${data.status}`,
+						);
+					checkMediaType(data.headers, "hpke-config-list", task.dapVersion);
+					return HpkeConfigList.parse(data.body);
+				},
+				catch: asError,
+			});
 		});
-		options.signal?.throwIfAborted();
-		if (data.status < 200 || data.status >= 300)
-			throw new DAPError(
-				"HttpError",
-				`HPKE config request failed with HTTP ${data.status}`,
-			);
-		checkMediaType(data.headers, "hpke-config-list", task.dapVersion);
-		return HpkeConfigList.parse(data.body);
-	};
-	const [leader, helper] = await Promise.all([
-		get(task.leader),
-		get(task.helper),
-	]);
-	return Object.freeze({ leader, helper });
+	return Effect.gen(function* () {
+		yield* Effect.try({
+			try: () => options.signal?.throwIfAborted(),
+			catch: asError,
+		});
+		const [leader, helper] = yield* Effect.all(
+			[get(task.leader), get(task.helper)],
+			{ concurrency: 2 },
+		);
+		return Object.freeze({ leader, helper });
+	});
 }

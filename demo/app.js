@@ -1,5 +1,6 @@
 import { prio3Count, Task } from "dap-ts";
 import { createCounter } from "sinbad";
+import { Effect } from "effect";
 
 const status = document.querySelector("#status");
 const button = document.querySelector("#count");
@@ -17,14 +18,14 @@ try {
     const proxy = new URL(`/${role}${url.pathname}${url.search}`, location.origin);
     return fetch(new Request(proxy, request));
   };
-  const count = await createCounter(task, { fetch: proxyFetch });
+  const count = await Effect.runPromise(createCounter(task, { fetch: proxyFetch }));
   button.disabled = false;
   status.textContent = "Ready";
   button.addEventListener("click", async () => {
     button.disabled = true;
     status.textContent = "Sending…";
     try {
-      const result = await count();
+      const result = await Effect.runPromise(count());
       status.textContent = result.ok ? "Count report accepted" : "Count report rejected";
     } catch (error) {
       status.textContent = error instanceof Error ? error.message : "Upload failed";

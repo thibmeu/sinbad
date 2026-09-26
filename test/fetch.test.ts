@@ -1,5 +1,6 @@
 import { DAPClient, HpkeConfigList, prio3Count, Task } from "dap-ts";
 import { encodeHpkeConfigList } from "dap-ts/messages";
+import { Effect } from "effect";
 import { expect, it, vi } from "vitest";
 import {
 	execute,
@@ -47,7 +48,10 @@ it("fetches both HPKE lists only when explicitly requested", async () => {
 			},
 		});
 	});
-	const lists = await fetchHpkeConfigs(task, { fetch });
+	const program = fetchHpkeConfigs(task, { fetch });
+	// Building an Effect must not send requests.
+	expect(fetch).not.toHaveBeenCalled();
+	const lists = await Effect.runPromise(program);
 	expect(
 		fetch.mock.calls.map(([request]) => (request as Request).url).sort(),
 	).toEqual(["https://h/hpke_config", "https://l/hpke_config"]);
@@ -72,10 +76,12 @@ it("executes uploads once, allowing authentication and replay of the same bytes"
 	for (let i = 0; i < 2; i++)
 		expect(
 			(
-				await execute(upload, {
-					fetch,
-					headers: { authorization: "Bearer test" },
-				})
+				await Effect.runPromise(
+					execute(upload, {
+						fetch,
+						headers: { authorization: "Bearer test" },
+					}),
+				)
 			).ok,
 		).toBe(true);
 	expect(fetch).toHaveBeenCalledTimes(2);
@@ -91,12 +97,16 @@ it("does not retry HTTP or network failures, and passes cancellation through", a
 	const client = new DAPClient(task, { hpke });
 	const upload = client.prepareUpload([await client.prepareReport(1)]);
 	const fetch = vi.fn(async () => new Response(null, { status: 503 }));
-	await expect(execute(upload, { fetch })).rejects.toMatchObject({
+	expect(
+		await Effect.runPromise(Effect.flip(execute(upload, { fetch }))),
+	).toMatchObject({
 		code: "HttpError",
 	});
 	expect(fetch).toHaveBeenCalledTimes(1);
 	const abort = AbortSignal.abort();
-	await expect(execute(upload, { fetch, signal: abort })).rejects.toThrow();
+	await expect(
+		Effect.runPromise(execute(upload, { fetch, signal: abort })),
+	).rejects.toThrow();
 	expect(fetch).toHaveBeenCalledTimes(1);
 	const controller = new AbortController();
 	const request = toRequest(upload.request, { signal: controller.signal });
@@ -105,9 +115,9 @@ it("does not retry HTTP or network failures, and passes cancellation through", a
 	const failed = vi.fn(async () => {
 		throw new TypeError("network failure");
 	});
-	await expect(execute(upload, { fetch: failed })).rejects.toThrow(
-		"network failure",
-	);
+	await expect(
+		Effect.runPromise(execute(upload, { fetch: failed })),
+	).rejects.toThrow("network failure");
 	expect(failed).toHaveBeenCalledTimes(1);
 });
 
@@ -121,7 +131,7 @@ it("reads highly fragmented responses without spreading chunks into arguments", 
 			},
 		}),
 	);
-	const result = await fromResponse(response);
+	const result = await Effect.runPromise(fromResponse(response));
 	expect(result.body).toEqual(new Uint8Array(150_000).fill(42));
 });
 
@@ -135,13 +145,17 @@ it("bounds streamed responses and cancels an oversized body", async () => {
 			cancelled = true;
 		},
 	});
-	await expect(
-		fromResponse(new Response(body), { maxResponseSize: 4 }),
-	).rejects.toMatchObject({ code: "InvalidResponse" });
+	expect(
+		await Effect.runPromise(
+			Effect.flip(fromResponse(new Response(body), { maxResponseSize: 4 })),
+		),
+	).toMatchObject({ code: "InvalidResponse" });
 	expect(cancelled).toBe(true);
-	const response = await fromResponse(new Response(new Uint8Array([1, 2, 3])), {
-		maxResponseSize: 3,
-	});
+	const response = await Effect.runPromise(
+		fromResponse(new Response(new Uint8Array([1, 2, 3])), {
+			maxResponseSize: 3,
+		}),
+	);
 	expect(response.body).toEqual(new Uint8Array([1, 2, 3]));
 });
 
@@ -158,7 +172,9 @@ it("rejects invalid HPKE responses before constructing a client", async () => {
 		}),
 	]) {
 		await expect(
-			fetchHpkeConfigs(task, { fetch: async () => response.clone() }),
+			Effect.runPromise(
+				fetchHpkeConfigs(task, { fetch: async () => response.clone() }),
+			),
 		).rejects.toThrow();
 	}
 });

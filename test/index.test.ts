@@ -1,5 +1,6 @@
 import { prio3Count, Task } from "dap-ts";
 import { encodeHpkeConfigList } from "dap-ts/messages";
+import { Effect } from "effect";
 import { expect, it, vi } from "vitest";
 import { createCounter } from "../src/index.js";
 
@@ -36,9 +37,9 @@ it("fetches both HPKE lists once and uploads one report per count", async () => 
 		}
 		return new Response(null, { status: 200 });
 	});
-	const count = await createCounter(task, { fetch });
-	expect((await count()).accepted).toHaveLength(1);
-	expect((await count()).accepted).toHaveLength(1);
+	const count = await Effect.runPromise(createCounter(task, { fetch }));
+	expect((await Effect.runPromise(count())).accepted).toHaveLength(1);
+	expect((await Effect.runPromise(count())).accepted).toHaveLength(1);
 	expect(requests.map((request) => request.method)).toEqual([
 		"GET",
 		"GET",
