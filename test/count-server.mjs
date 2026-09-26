@@ -6,8 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { DAPClient, HpkeConfigList, prio3Count, Task } from "dap-ts";
-import { addCountOutputShare } from "dap-ts/aggregator";
+import { Client, HpkeConfigList, prio3Count, Task } from "dap-ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const directory = await mkdtemp(join(tmpdir(), "sinbad-count-"));
@@ -78,7 +77,7 @@ try {
 		id: taskWire.id,
 		configuration: Uint8Array.fromHex(taskWire.configuration),
 	}).expect(prio3Count());
-	const client = new DAPClient(task, {
+	const client = new Client(task, {
 		hpke: {
 			leader: await config(leaderPort),
 			helper: await config(helperPort),
@@ -186,11 +185,17 @@ try {
 		parts.map((part) => part.reportCount),
 		[1, 1],
 	);
-	const total = addCountOutputShare(
-		Uint8Array.fromHex(parts[0].share),
-		Uint8Array.fromHex(parts[1].share),
+	const total = parts.reduce(
+		(sum, part) =>
+			(sum +
+				new DataView(Uint8Array.fromHex(part.share).buffer).getBigUint64(
+					0,
+					true,
+				)) %
+			((1n << 64n) - (1n << 32n) + 1n),
+		0n,
 	);
-	assert.equal(new DataView(total.buffer).getBigUint64(0, true), 1n);
+	assert.equal(total, 1n);
 	const prior = client.prepareUpload([
 		await client.prepareReport(1, { time: Date.now() - 60_000 }),
 	]);

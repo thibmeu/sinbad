@@ -36,11 +36,11 @@ upload once; callers decide whether to retry it.
 collector private key belong on a backend:
 
 ```js
-import { Collector } from "dap-ts/collector";
+import { Collector } from "dap-ts";
 import { collect } from "sinbad/collector";
 import { Effect } from "effect";
 
-const collector = new Collector(task, { configId, privateKey });
+const collector = await Collector.create(task, { configId, privateKey });
 const progress = await Effect.runPromise(collect(collector, { start: batchStart, duration: 1 }, {
   headers: { authorization: `Bearer ${collectorToken}` },
 }));

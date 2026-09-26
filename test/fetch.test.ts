@@ -1,4 +1,4 @@
-import { DAPClient, HpkeConfigList, prio3Count, Task } from "dap-ts";
+import { Client, HpkeConfigList, prio3Count, Task } from "dap-ts";
 import { encodeHpkeConfigList } from "dap-ts/messages";
 import { Effect } from "effect";
 import { expect, it, vi } from "vitest";
@@ -55,13 +55,13 @@ it("fetches both HPKE lists only when explicitly requested", async () => {
 	expect(
 		fetch.mock.calls.map(([request]) => (request as Request).url).sort(),
 	).toEqual(["https://h/hpke_config", "https://l/hpke_config"]);
-	const client = new DAPClient(task, { hpke: lists });
+	const client = new Client(task, { hpke: lists });
 	await client.prepareReport(1);
 	expect(fetch).toHaveBeenCalledTimes(2);
 });
 
 it("executes uploads once, allowing authentication and replay of the same bytes", async () => {
-	const client = new DAPClient(task, { hpke });
+	const client = new Client(task, { hpke });
 	const upload = client.prepareUpload(await client.prepareReports([1, 0]));
 	const bodies: Uint8Array[] = [];
 	const fetch = vi.fn(async (input: RequestInfo | URL) => {
@@ -94,7 +94,7 @@ it("executes uploads once, allowing authentication and replay of the same bytes"
 });
 
 it("does not retry HTTP or network failures, and passes cancellation through", async () => {
-	const client = new DAPClient(task, { hpke });
+	const client = new Client(task, { hpke });
 	const upload = client.prepareUpload([await client.prepareReport(1)]);
 	const fetch = vi.fn(async () => new Response(null, { status: 503 }));
 	expect(

@@ -1,11 +1,11 @@
-import { DAPError } from "dap-ts";
 import type {
 	CollectionProgress,
 	CollectionQuery,
 	CollectionState,
 	Collector,
 	PreparedCollection,
-} from "dap-ts/collector";
+} from "dap-ts";
+import { DAPError } from "dap-ts";
 import { Effect } from "effect";
 import {
 	asError,

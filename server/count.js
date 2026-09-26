@@ -1,15 +1,7 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { createServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
-import { prio3Count, Task } from "dap-ts";
-import {
-	addCountOutputShare,
-	encodeCountJobRejection,
-	helperCountBatchInit,
-	leaderCountBatchFinish,
-	leaderCountBatchInit,
-	prepareAggregatorKey,
-} from "dap-ts/aggregator";
+import { Helper, Leader, prio3Count, Task } from "dap-ts";
 import { decodeUploadRequest, encodeHpkeConfigList } from "dap-ts/messages";
 
 const role = process.env.ROLE;
@@ -96,7 +88,7 @@ function transaction(fn) {
 }
 function add(row, share, pending = row.pending) {
 	sql.updateBucket.run(
-		addCountOutputShare(owned(row.share), share),
+		aggregator.addShare(owned(row.share), share),
 		row.count + 1,
 		pending,
 		row.start,
@@ -122,9 +114,10 @@ if (!privateKey || !publicKey) {
 	});
 }
 const configId = role === "leader" ? 7 : 8;
-const key = await prepareAggregatorKey({
-	configId,
-	privateKey: owned(privateKey),
+const aggregator = await (role === "leader" ? Leader : Helper).create(task, {
+	hpke: { configId, privateKey: owned(privateKey) },
+	verificationKeyId: 0,
+	verifyKey,
 });
 const hpkeConfigs = encodeHpkeConfigList([
 	{ id: configId, kemId: 32, kdfId: 1, aeadId: 1, publicKey: owned(publicKey) },
@@ -186,7 +179,7 @@ async function helperJob(request, response) {
 		);
 		return;
 	}
-	const result = await helperCountBatchInit(task, body, key, 0, verifyKey);
+	const result = await aggregator.verify(body);
 	const outbound = transaction(() => {
 		const prior = sql.job.get(jobId);
 		if (prior) return owned(prior.response);
@@ -196,9 +189,8 @@ async function helperJob(request, response) {
 			if (report.outputShare) {
 				const row = bucket(report.time);
 				if (sql.report.get(report.reportId))
-					value = encodeCountJobRejection(report.reportId, 2);
-				else if (row.collected)
-					value = encodeCountJobRejection(report.reportId, 1);
+					value = aggregator.reject(report.reportId, 2);
+				else if (row.collected) value = aggregator.reject(report.reportId, 1);
 				else {
 					sql.claim.run(report.reportId);
 					add(row, report.outputShare);
@@ -269,7 +261,7 @@ async function leaderUpload(request, response) {
 			else candidates.push(report);
 		}
 		const job = candidates.length
-			? await leaderCountBatchInit(task, candidates, key, 0, verifyKey)
+			? await aggregator.prepare(candidates)
 			: { reports: [], rejected: [] };
 		for (const rejected of job.rejected) {
 			const code = reportErrorCodes[rejected.error.code];
@@ -350,7 +342,7 @@ async function leaderUpload(request, response) {
 			state: owned(saved.state.subarray(offset / 2, offset / 2 + 8)),
 		});
 	}
-	const results = leaderCountBatchFinish(states, inbound);
+	const results = aggregator.finish(states, inbound);
 	const outbound = transaction(() => {
 		const current = sql.job.get(jobId);
 		if (current.upload_response) {

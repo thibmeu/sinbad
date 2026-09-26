@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { cpus } from "node:os";
 import { performance } from "node:perf_hooks";
-import { DAPClient, HpkeConfigList, prio3Count, Task } from "dap-ts";
+import { Client, HpkeConfigList, prio3Count, Task } from "dap-ts";
 
 const mode = process.argv[2];
 const count = Number(process.argv[3] ?? 200);
@@ -156,7 +156,7 @@ function finishedJanus(role = 0) {
 	);
 }
 const task = await setup();
-const client = new DAPClient(task, {
+const client = new Client(task, {
 	hpke: { leader: await config(0), helper: await config(1) },
 });
 // Keep report preparation outside the timed window.

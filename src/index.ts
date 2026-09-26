@@ -1,4 +1,4 @@
-import { DAPClient, Task, type UploadResult } from "dap-ts";
+import { Client, Task, type UploadResult } from "dap-ts";
 import { Effect } from "effect";
 import {
 	asError,
@@ -22,7 +22,7 @@ export function createCounter(
 		});
 		const hpke = yield* fetchHpkeConfigs(task, options);
 		const client = yield* Effect.try({
-			try: () => new DAPClient(task, { hpke }),
+			try: () => new Client(task, { hpke }),
 			catch: asError,
 		});
 		return () =>

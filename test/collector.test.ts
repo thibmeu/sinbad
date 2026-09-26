@@ -1,4 +1,4 @@
-import type { Collector, PreparedCollection } from "dap-ts/collector";
+import type { Collector, PreparedCollection } from "dap-ts";
 import { Effect } from "effect";
 import { expect, it, vi } from "vitest";
 import { collect, executeCollection } from "../src/collector.js";
