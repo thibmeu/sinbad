@@ -2,21 +2,47 @@
   "name": "sinbad",
   "version": "0.0.0",
   "private": true,
+  "description": "Simple analytics over dap-ts",
   "type": "module",
   "license": "MIT",
+  "sideEffects": false,
   "exports": {
-    ".": "./src/index.js"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./fetch": {
+      "types": "./dist/fetch.d.ts",
+      "default": "./dist/fetch.js"
+    },
+    "./collector": {
+      "types": "./dist/collector.d.ts",
+      "default": "./dist/collector.js"
+    }
   },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
   "scripts": {
-    "build:demo": "esbuild demo/app.js --bundle --format=esm --outfile=demo/app.bundle.js",
+    "prebuild": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "tsc",
+    "prepare": "npm run build",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
+    "lint": "biome check src test",
+    "format": "biome format --write src test",
+    "build:demo": "npm run build && esbuild demo/app.js --bundle --format=esm --outfile=demo/app.bundle.js",
     "demo": "npm run build:demo && node demo/server.js",
-    "test": "node --test"
+    "test": "vitest run"
   },
   "peerDependencies": {
     "dap-ts": "*"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.13",
     "dap-ts": "file:../dap-ts",
-    "esbuild": "0.25.12"
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.1"
   }
 }

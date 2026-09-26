@@ -1,6 +1,6 @@
 # Sinbad
 
-A small count-reporting library built on [dap-ts](https://github.com/thibmeu/dap-ts).
+A small analytics library and Fetch transport for [dap-ts](https://github.com/thibmeu/dap-ts).
 
 ```js
 import { prio3Count, Task } from "dap-ts";
@@ -21,7 +21,33 @@ const result = await count();
 if (!result.ok) console.warn(result.rejected);
 ```
 
-The task must already be provisioned on both aggregators. Each call sends one Prio3Count measurement with value `1`. `createCounter` fetches the leader and helper HPKE configurations once. It accepts the same `fetch`, `headers`, and `signal` options as dap-ts's Fetch helpers. It returns dap-ts's upload result.
+The task must already be provisioned on both aggregators. Each call sends one Prio3Count measurement with value `1`. `createCounter` fetches the leader and helper HPKE configurations once. It accepts a custom `fetch`, request `headers`, and an abort `signal`. It returns dap-ts's upload result.
+
+## Fetch transport
+
+`sinbad/fetch` exports `fetchHpkeConfigs(task)`, `execute(preparedUpload)`,
+`toRequest()`, and `fromResponse()`. The first two accept a custom Fetch
+implementation, headers, and an abort signal. `execute()` sends an existing
+upload once; callers decide whether to retry it.
+
+`sinbad/collector` exports `collect(collector, queryOrState)` and
+`executeCollection(preparedCollection)`. Collection credentials and the
+collector private key belong on a backend:
+
+```js
+import { Collector } from "dap-ts/collector";
+import { collect } from "sinbad/collector";
+
+const collector = new Collector(task, { configId, privateKey });
+const progress = await collect(collector, { start: batchStart, duration: 1 }, {
+  headers: { authorization: `Bearer ${collectorToken}` },
+});
+if (progress.status === "pending") saveForLater(progress.state);
+else console.log(progress.count ?? progress.sum);
+```
+
+The package builds ESM JavaScript and TypeScript declarations from strict
+TypeScript source. The demo remains plain HTML, CSS, and JavaScript.
 
 ## Local demo
 

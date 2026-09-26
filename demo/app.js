@@ -1,5 +1,5 @@
 import { prio3Count, Task } from "dap-ts";
-import { createCounter } from "../src/index.js";
+import { createCounter } from "sinbad";
 
 const status = document.querySelector("#status");
 const button = document.querySelector("#count");
