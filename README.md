@@ -71,6 +71,34 @@ Open <http://localhost:8080>. The demo server provisions a new count task on bot
 
 The demo reports accepted uploads. Collection and display of aggregate totals are not implemented yet. DAP also needs a collector, batch policy, and independent leader and helper operations before it can serve real analytics. The dap-ts cryptography has not been audited.
 
+## DAP 19 Count server example
+
+`server/count.js` runs as a leader or helper. Each role has its own SQLite file
+and HPKE key. It accepts one Count report per upload, saves the exact
+aggregation request, and commits each verified share once. A retry after a
+lost response returns the saved bytes. This example has an internal bucket
+collection endpoint; it does not implement DAP collection jobs.
+
+Build the sibling package, install Sinbad, and start both roles:
+
+```sh
+cd ../dap-ts && npm ci && npm run build
+cd ../sinbad && npm ci
+docker compose -f compose.count.yaml up -d
+```
+
+The leader listens on `127.0.0.1:9011` and the helper on `127.0.0.1:9012`.
+Named Docker volumes keep their SQLite files across restarts. The task uses
+the DAP 19 configuration returned by `GET /task`; each role serves its HPKE
+config at `GET /hpke_config`. The addresses in the task configuration are
+fixed HTTPS names for local testing, so the caller routes requests to the
+loopback ports. The Compose token and verification key are fixed test values.
+
+Run `npm run test:count-server` to exercise a lost Helper response across a
+Leader restart and verify that both buckets contain one contribution. The
+test uses temporary SQLite files and loopback ports. Stop the Compose example
+with `docker compose -f compose.count.yaml down`; add `-v` to discard its data.
+
 ## License
 
 [MIT](LICENSE). Janus is a separate MPL-2.0 project and is built from its pinned source by the local demo script.

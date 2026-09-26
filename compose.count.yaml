@@ -1,0 +1,41 @@
+services:
+  leader:
+    image: node:26-alpine
+    working_dir: /work/sinbad
+    command: ["node", "server/count.js"]
+    environment:
+      ROLE: leader
+      HOST: 0.0.0.0
+      PORT: 8080
+      DATA_FILE: /data/count.sqlite
+      HELPER_URL: http://helper:8080/
+      AUTH_TOKEN: local-count-token
+      VERIFY_KEY_HEX: "0000000000000000000000000000000000000000000000000000000000000000"
+    volumes:
+      - .:/work/sinbad:ro
+      - ../dap-ts:/work/dap-ts:ro
+      - count-leader-data:/data
+    ports:
+      - "127.0.0.1:9011:8080"
+    depends_on:
+      - helper
+  helper:
+    image: node:26-alpine
+    working_dir: /work/sinbad
+    command: ["node", "server/count.js"]
+    environment:
+      ROLE: helper
+      HOST: 0.0.0.0
+      PORT: 8080
+      DATA_FILE: /data/count.sqlite
+      AUTH_TOKEN: local-count-token
+      VERIFY_KEY_HEX: "0000000000000000000000000000000000000000000000000000000000000000"
+    volumes:
+      - .:/work/sinbad:ro
+      - ../dap-ts:/work/dap-ts:ro
+      - count-helper-data:/data
+    ports:
+      - "127.0.0.1:9012:8080"
+volumes:
+  count-leader-data:
+  count-helper-data:
