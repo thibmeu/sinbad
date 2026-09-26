@@ -6,10 +6,47 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { Client, HpkeConfigList, prio3Count, Task } from "dap-ts";
+import {
+	Client,
+	HpkeConfigList,
+	prio3Count,
+	prio3Histogram,
+	prio3Sum,
+	Task,
+} from "dap-ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const directory = await mkdtemp(join(tmpdir(), "sinbad-count-"));
+const kind = process.argv[2] ?? "count";
+const vdaf =
+	kind === "sum"
+		? prio3Sum(1337)
+		: kind === "histogram"
+			? prio3Histogram(4, 2)
+			: kind === "count"
+				? prio3Count()
+				: undefined;
+if (!vdaf) throw new Error("Expected count, sum, or histogram");
+const measurement = kind === "sum" ? 42 : kind === "histogram" ? 2 : 1;
+const width = kind === "histogram" ? 16 : 8;
+const modulus =
+	kind === "histogram"
+		? (1n << 66n) * 4611686018427387897n + 1n
+		: (1n << 64n) - (1n << 32n) + 1n;
+function aggregate(parts) {
+	return Array.from({ length: kind === "histogram" ? 4 : 1 }, (_, i) =>
+		parts.reduce((sum, part) => {
+			const bytes = Uint8Array.fromHex(part.share);
+			const view = new DataView(bytes.buffer);
+			const low = view.getBigUint64(i * width, true);
+			const value =
+				width === 16
+					? low | (view.getBigUint64(i * width + 8, true) << 64n)
+					: low;
+			return (sum + value) % modulus;
+		}, 0n),
+	);
+}
+const directory = await mkdtemp(join(tmpdir(), `sinbad-${kind}-`));
 const token = "test-token";
 const children = new Set();
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -31,6 +68,7 @@ async function start(role, port, helperUrl, extra = {}) {
 			DATA_FILE: join(directory, `${role}.sqlite`),
 			AUTH_TOKEN: token,
 			VERIFY_KEY_HEX: "00".repeat(32),
+			VDAF: kind,
 			HELPER_URL: helperUrl,
 			...extra,
 		},
@@ -68,7 +106,7 @@ try {
 	const helperPort = await freePort();
 	const leaderUrl = `http://127.0.0.1:${leaderPort}/`;
 	const helperUrl = `http://127.0.0.1:${helperPort}/`;
-	const helper = await start("helper", helperPort, helperUrl, {
+	let helper = await start("helper", helperPort, helperUrl, {
 		RESPONSE_DELAY_MS: "1500",
 	});
 	let leader = await start("leader", leaderPort, helperUrl);
@@ -76,7 +114,7 @@ try {
 	const task = Task.decode({
 		id: taskWire.id,
 		configuration: Uint8Array.fromHex(taskWire.configuration),
-	}).expect(prio3Count());
+	}).expect(vdaf);
 	const client = new Client(task, {
 		hpke: {
 			leader: await config(leaderPort),
@@ -88,7 +126,7 @@ try {
 		[{ publicExtensions: [{ type: 500, data: new Uint8Array() }] }, 7],
 	]) {
 		const rejected = client.prepareUpload([
-			await client.prepareReport(1, options),
+			await client.prepareReport(measurement, options),
 		]);
 		const reply = await fetch(new URL(`tasks/${task.id}/reports`, leaderUrl), {
 			method: "POST",
@@ -103,7 +141,7 @@ try {
 		});
 		assert.equal(outcome.rejected[0]?.rawCode, code);
 	}
-	const prepared = await client.prepareReport(1);
+	const prepared = await client.prepareReport(measurement);
 	const upload = client.prepareUpload([prepared]);
 	const target = new URL(`tasks/${task.id}/reports`, leaderUrl);
 	const pending = fetch(target, {
@@ -127,6 +165,8 @@ try {
 	await stop(leader);
 	await pending;
 	helperDb.close();
+	await stop(helper);
+	helper = await start("helper", helperPort, helperUrl);
 	leader = await start("leader", leaderPort, helperUrl);
 	const retried = await fetch(target, {
 		method: "POST",
@@ -185,19 +225,12 @@ try {
 		parts.map((part) => part.reportCount),
 		[1, 1],
 	);
-	const total = parts.reduce(
-		(sum, part) =>
-			(sum +
-				new DataView(Uint8Array.fromHex(part.share).buffer).getBigUint64(
-					0,
-					true,
-				)) %
-			((1n << 64n) - (1n << 32n) + 1n),
-		0n,
+	assert.deepEqual(
+		aggregate(parts),
+		kind === "histogram" ? [0n, 0n, 1n, 0n] : [BigInt(measurement)],
 	);
-	assert.equal(total, 1n);
 	const prior = client.prepareUpload([
-		await client.prepareReport(1, { time: Date.now() - 60_000 }),
+		await client.prepareReport(measurement, { time: Date.now() - 60_000 }),
 	]);
 	const priorReply = await fetch(target, {
 		method: "POST",
@@ -215,9 +248,9 @@ try {
 	);
 	const batchTime = Date.now() - 120_000;
 	const batch = client.prepareUpload([
-		await client.prepareReport(1, { time: batchTime }),
-		await client.prepareReport(1, { time: Date.now() + 10 * 60_000 }),
-		await client.prepareReport(1, { time: batchTime }),
+		await client.prepareReport(measurement, { time: batchTime }),
+		await client.prepareReport(measurement, { time: Date.now() + 10 * 60_000 }),
+		await client.prepareReport(measurement, { time: batchTime }),
 	]);
 	const batchReply = await fetch(target, {
 		method: "POST",
@@ -240,16 +273,40 @@ try {
 	});
 	assert.equal(batchRetry.status, 200);
 	assert.deepEqual(new Uint8Array(await batchRetry.arrayBuffer()), batchBody);
+	const batchParts = [];
 	for (const port of [leaderPort, helperPort]) {
 		const collected = await fetch(
 			`http://127.0.0.1:${port}/internal/collect?start=${Math.floor(batchTime / 60_000)}`,
 			{ method: "POST", headers: { authorization: `Bearer ${token}` } },
 		);
 		assert.equal(collected.status, 200, await collected.clone().text());
-		assert.equal((await collected.json()).reportCount, 2);
+		const part = await collected.json();
+		assert.equal(part.reportCount, 2);
+		batchParts.push(part);
 	}
+	assert.deepEqual(
+		aggregate(batchParts),
+		kind === "histogram" ? [0n, 0n, 2n, 0n] : [BigInt(measurement * 2)],
+	);
+	const afterCollection = client.prepareUpload([
+		await client.prepareReport(measurement, { time: batchTime }),
+	]);
+	const collectedReply = await fetch(target, {
+		method: "POST",
+		headers: afterCollection.request.headers,
+		body: afterCollection.request.body,
+	});
+	assert.equal(collectedReply.status, 200);
+	assert.equal(
+		afterCollection.process({
+			status: collectedReply.status,
+			headers: Object.fromEntries(collectedReply.headers),
+			body: new Uint8Array(await collectedReply.arrayBuffer()),
+		}).rejected[0]?.rawCode,
+		1,
+	);
 	console.log(
-		"Count retries and mixed batches commit each accepted report once",
+		`${kind} retries and mixed batches commit each accepted report once`,
 	);
 	await stop(leader);
 	await stop(helper);

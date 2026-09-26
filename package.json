@@ -35,6 +35,7 @@
     "demo": "npm run build:demo && node demo/server.js",
     "test": "vitest run",
     "test:count-server": "node test/count-server.mjs",
+    "test:aggregate-server": "node test/count-server.mjs && node test/count-server.mjs sum && node test/count-server.mjs histogram",
     "bench:count": "node bench/count.mjs"
   },
   "peerDependencies": {

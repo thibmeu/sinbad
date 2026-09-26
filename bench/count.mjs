@@ -8,8 +8,11 @@ const mode = process.argv[2];
 const count = Number(process.argv[3] ?? 200);
 const concurrency = Number(process.argv[4] ?? 10);
 const batchSize = Number(process.argv[5] ?? 1);
+const vdaf = process.argv[6] ?? "count";
 if (
 	!["sinbad", "janus"].includes(mode) ||
+	!["count", "sum", "histogram"].includes(vdaf) ||
+	(mode === "janus" && vdaf !== "count") ||
 	!Number.isSafeInteger(count) ||
 	count < 1 ||
 	!Number.isSafeInteger(concurrency) ||
@@ -18,7 +21,7 @@ if (
 	batchSize < 1
 )
 	throw new Error(
-		"Usage: node bench/count.mjs sinbad|janus [count] [concurrency] [batchSize]",
+		"Usage: node bench/count.mjs sinbad|janus [count] [concurrency] [batchSize] [count|sum|histogram]",
 	);
 
 const ports = mode === "sinbad" ? [9011, 9012] : [9001, 9002];
@@ -51,10 +54,12 @@ async function setup() {
 		const response = await fetch(endpoint(0, "task"));
 		assert.equal(response.status, 200);
 		const wire = await response.json();
-		return Task.decode({
+		const wireTask = Task.decode({
 			id: wire.id,
 			configuration: Uint8Array.fromHex(wire.configuration),
-		}).expect(prio3Count());
+		});
+		assert.equal(wireTask.vdaf.type, `prio3-${vdaf}`);
+		return wireTask;
 	}
 	const task = Task.create({
 		id: crypto.getRandomValues(new Uint8Array(32)).toBase64({
@@ -168,7 +173,12 @@ const uploads = [];
 for (let i = 0; i < count; i += batchSize) {
 	const reports = [];
 	for (let j = i; j < Math.min(i + batchSize, count); j++)
-		reports.push(await client.prepareReport(1, { time }));
+		reports.push(
+			await client.prepareReport(
+				vdaf === "sum" ? 42 : vdaf === "histogram" ? 2 : 1,
+				{ time },
+			),
+		);
 	uploads.push(client.prepareUpload(reports));
 }
 const janusStartingCount =
@@ -238,6 +248,7 @@ console.log(
 	JSON.stringify(
 		{
 			mode,
+			vdaf,
 			count,
 			concurrency,
 			batchSize,

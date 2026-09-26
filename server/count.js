@@ -1,7 +1,14 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { createServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
-import { Helper, Leader, prio3Count, Task } from "dap-ts";
+import {
+	Helper,
+	Leader,
+	prio3Count,
+	prio3Histogram,
+	prio3Sum,
+	Task,
+} from "dap-ts";
 import { decodeUploadRequest, encodeHpkeConfigList } from "dap-ts/messages";
 
 const role = process.env.ROLE;
@@ -18,15 +25,27 @@ if (
 	verifyKey.length !== 32
 )
 	throw new Error("Invalid server configuration");
+const vdaf =
+	process.env.VDAF === "sum"
+		? prio3Sum(1337)
+		: process.env.VDAF === "histogram"
+			? prio3Histogram(
+					Number(process.env.HISTOGRAM_LENGTH ?? 4),
+					Number(process.env.HISTOGRAM_CHUNK_LENGTH ?? 2),
+				)
+			: process.env.VDAF === undefined || process.env.VDAF === "count"
+				? prio3Count()
+				: undefined;
+if (!vdaf) throw new Error("Invalid VDAF");
 const task = Task.create({
 	id: "8BY0RzZMzxvA46_8ymhzycOB9krN-QIGYvg_RsByGec",
-	info: "sinbad-count-v1",
+	info: `sinbad-${process.env.VDAF ?? "count"}-v1`,
 	leader: "https://leader.example/",
 	helper: "https://helper.example/",
 	timePrecision: 60,
 	minBatchSize: 1,
 	batchMode: "time-interval",
-	vdaf: prio3Count(),
+	vdaf,
 });
 const db = new DatabaseSync(process.env.DATA_FILE ?? `${role}.sqlite`);
 db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
@@ -65,7 +84,12 @@ const sql = {
 	),
 	collect: db.prepare("UPDATE buckets SET collected=1 WHERE start=?"),
 };
-const zero = new Uint8Array(8);
+const zero = new Uint8Array(
+	task.vdaf.type === "prio3-histogram" ? task.vdaf.length * 16 : 8,
+);
+// Histogram Leader state includes one Field128 share per bucket and a joint seed.
+const stateLength =
+	task.vdaf.type === "prio3-histogram" ? task.vdaf.length * 16 + 32 : 8;
 const owned = (bytes) => new Uint8Array(bytes);
 const same = (a, b) =>
 	a.length === b.length && a.every((value, i) => value === b[i]);
@@ -98,6 +122,11 @@ const uploadError = (id, code) => Uint8Array.of(...id, code);
 
 let privateKey = sql.meta.get("private")?.value;
 let publicKey = sql.meta.get("public")?.value;
+const savedTask = sql.meta.get("task")?.value;
+const taskBytes = task.encodeConfiguration();
+if (savedTask && !same(savedTask, taskBytes))
+	throw new Error("Database belongs to a different task configuration");
+if (!savedTask) sql.putMeta.run("task", taskBytes);
 if (!privateKey || !publicKey) {
 	const pair = generateKeyPairSync("x25519");
 	privateKey = Buffer.from(
@@ -339,7 +368,12 @@ async function leaderUpload(request, response) {
 		states.push({
 			reportId,
 			time: times.get(reportId.toHex()),
-			state: owned(saved.state.subarray(offset / 2, offset / 2 + 8)),
+			state: owned(
+				saved.state.subarray(
+					(offset / 16) * stateLength,
+					(offset / 16 + 1) * stateLength,
+				),
+			),
 		});
 	}
 	const results = aggregator.finish(states, inbound);

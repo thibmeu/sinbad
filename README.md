@@ -71,10 +71,10 @@ Open <http://localhost:8080>. The demo server provisions a new count task on bot
 
 The demo reports accepted uploads. Collection and display of aggregate totals are not implemented yet. DAP also needs a collector, batch policy, and independent leader and helper operations before it can serve real analytics. The dap-ts cryptography has not been audited.
 
-## DAP 19 Count server example
+## DAP 19 aggregator server example
 
 `server/count.js` runs as a leader or helper. Each role has its own SQLite file
-and HPKE key. It puts the Count reports in each upload into one aggregation job,
+and HPKE key. It puts reports in each upload into one aggregation job,
 saves the exact request, and commits each verified share once. A retry after a
 lost response returns the saved bytes. This example has an internal bucket
 collection endpoint; it does not implement DAP collection jobs.
@@ -95,15 +95,18 @@ config at `GET /hpke_config`. The addresses in the task configuration are
 fixed HTTPS names for local testing, so the caller routes requests to the
 loopback ports. The Compose token and verification key are fixed test values.
 
-Run `npm run test:count-server` to exercise a lost Helper response across a
-Leader restart, a mixed batch, and exact retries. The
-test uses temporary SQLite files and loopback ports. Stop the Compose example
+Run `npm run test:aggregate-server` to exercise Count, Sum, and Histogram
+through role restarts, mixed batches, exact retries, and collection. The test
+uses temporary SQLite files and loopback ports. Stop the Compose example
 with `docker compose -f compose.count.yaml down`; add `-v` to discard its data.
 
 With both roles running, `npm run bench:count -- sinbad 500 10 50` measures 500
 prepared Count reports in 10 uploads of 50 at concurrency 10. It checks the stored bucket counts
 and reports upload latency, verified throughput, container CPU time, and peak
 memory. Set `BENCH_MINUTES_AGO` to use a different minute for another run.
+For Sum, start Compose with `VDAF=sum` and pass `sum` as the benchmark's last
+argument. For Histogram, use `VDAF=histogram HISTOGRAM_LENGTH=100 HISTOGRAM_CHUNK_LENGTH=10`
+and pass `histogram`. Keep each run in a fresh, uncollected time bucket.
 
 ## License
 
