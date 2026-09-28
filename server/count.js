@@ -9,7 +9,16 @@ import {
 	prio3Sum,
 	Task,
 } from "dap-ts";
-import { decodeUploadRequest, encodeHpkeConfigList } from "dap-ts/messages";
+import {
+	decodeAggregateShare,
+	decodeAggregateShareRequest,
+	decodeCollectionJobRequest,
+	decodeUploadRequest,
+	encodeAggregateShare,
+	encodeAggregateShareRequest,
+	encodeCollectionJobResponse,
+	encodeHpkeConfigList,
+} from "dap-ts/messages";
 
 const role = process.env.ROLE;
 if (role !== "leader" && role !== "helper")
@@ -52,7 +61,9 @@ db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5
 CREATE TABLE IF NOT EXISTS meta (name TEXT PRIMARY KEY, value BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, request BLOB NOT NULL, state BLOB, report_id BLOB NOT NULL, time INTEGER NOT NULL, upload BLOB, response BLOB, upload_response BLOB, initial_errors BLOB);
 CREATE TABLE IF NOT EXISTS reports (id BLOB PRIMARY KEY);
-CREATE TABLE IF NOT EXISTS buckets (start INTEGER PRIMARY KEY, share BLOB NOT NULL, count INTEGER NOT NULL, pending INTEGER NOT NULL, collected INTEGER NOT NULL);`);
+CREATE TABLE IF NOT EXISTS buckets (start INTEGER PRIMARY KEY, share BLOB NOT NULL, count INTEGER NOT NULL, pending INTEGER NOT NULL, collected INTEGER NOT NULL, checksum BLOB);
+CREATE TABLE IF NOT EXISTS collection_jobs (id TEXT PRIMARY KEY, request BLOB NOT NULL, start INTEGER NOT NULL UNIQUE, response BLOB);
+CREATE INDEX IF NOT EXISTS ready_buckets ON buckets(collected,pending,start);`);
 if (
 	!db
 		.prepare("PRAGMA table_info(jobs)")
@@ -60,6 +71,26 @@ if (
 		.some((column) => column.name === "initial_errors")
 )
 	db.exec("ALTER TABLE jobs ADD COLUMN initial_errors BLOB");
+if (
+	!db
+		.prepare("PRAGMA table_info(buckets)")
+		.all()
+		.some((column) => column.name === "checksum")
+)
+	db.exec("ALTER TABLE buckets ADD COLUMN checksum BLOB");
+db.exec(
+	"UPDATE buckets SET checksum=zeroblob(32) WHERE checksum IS NULL AND count=0",
+);
+if (
+	db
+		.prepare(
+			"SELECT 1 FROM buckets WHERE checksum IS NULL AND count>0 AND collected=0 LIMIT 1",
+		)
+		.get()
+)
+	throw new Error(
+		"Existing uncollected buckets lack report checksums; use a fresh database or migrate them",
+	);
 const sql = {
 	meta: db.prepare("SELECT value FROM meta WHERE name=?"),
 	putMeta: db.prepare("INSERT INTO meta(name,value) VALUES (?,?)"),
@@ -77,12 +108,23 @@ const sql = {
 	claim: db.prepare("INSERT INTO reports(id) VALUES (?)"),
 	bucket: db.prepare("SELECT * FROM buckets WHERE start=?"),
 	ensureBucket: db.prepare(
-		"INSERT OR IGNORE INTO buckets(start,share,count,pending,collected) VALUES (?,?,?,?,0)",
+		"INSERT OR IGNORE INTO buckets(start,share,count,pending,collected,checksum) VALUES (?,?,?,?,0,?)",
 	),
 	updateBucket: db.prepare(
-		"UPDATE buckets SET share=?, count=?, pending=? WHERE start=?",
+		"UPDATE buckets SET share=?, count=?, pending=?, checksum=? WHERE start=?",
 	),
 	collect: db.prepare("UPDATE buckets SET collected=1 WHERE start=?"),
+	collectionJob: db.prepare("SELECT * FROM collection_jobs WHERE id=?"),
+	collectionForStart: db.prepare("SELECT * FROM collection_jobs WHERE start=?"),
+	insertCollection: db.prepare(
+		"INSERT INTO collection_jobs(id,request,start) VALUES (?,?,?)",
+	),
+	finishCollection: db.prepare(
+		"UPDATE collection_jobs SET response=? WHERE id=?",
+	),
+	ready: db.prepare(
+		"SELECT start FROM buckets WHERE collected=0 AND pending=0 AND count>=? AND start<? ORDER BY start LIMIT 100",
+	),
 };
 const zero = new Uint8Array(
 	task.vdaf.type === "prio3-histogram" ? task.vdaf.length * 16 : 8,
@@ -91,12 +133,13 @@ const zero = new Uint8Array(
 const stateLength =
 	task.vdaf.type === "prio3-histogram" ? task.vdaf.length * 16 + 32 : 8;
 const owned = (bytes) => new Uint8Array(bytes);
+const zeroChecksum = new Uint8Array(32);
 const same = (a, b) =>
 	a.length === b.length && a.every((value, i) => value === b[i]);
 function bucket(time) {
 	// DAP report times are already expressed in time-precision units.
 	const start = Number(time);
-	sql.ensureBucket.run(start, zero, 0, 0);
+	sql.ensureBucket.run(start, zero, 0, 0, zeroChecksum);
 	return sql.bucket.get(start);
 }
 function transaction(fn) {
@@ -110,11 +153,17 @@ function transaction(fn) {
 		throw error;
 	}
 }
-function add(row, share, pending = row.pending) {
+function add(row, share, reportId, pending = row.pending) {
+	if (!row.checksum)
+		throw new HttpError(409, "Legacy bucket has no report checksum");
+	const checksum = owned(row.checksum);
+	const digest = createHash("sha256").update(reportId).digest();
+	for (let i = 0; i < 32; i++) checksum[i] ^= digest[i];
 	sql.updateBucket.run(
 		aggregator.addShare(owned(row.share), share),
 		row.count + 1,
 		pending,
+		checksum,
 		row.start,
 	);
 }
@@ -151,6 +200,33 @@ const aggregator = await (role === "leader" ? Leader : Helper).create(task, {
 const hpkeConfigs = encodeHpkeConfigList([
 	{ id: configId, kemId: 32, kdfId: 1, aeadId: 1, publicKey: owned(publicKey) },
 ]);
+const collectorKey = process.env.COLLECTOR_PUBLIC_KEY_HEX
+	? {
+			id: Number(process.env.COLLECTOR_CONFIG_ID ?? 23),
+			kemId: 32,
+			kdfId: 1,
+			aeadId: 1,
+			publicKey: Uint8Array.fromHex(process.env.COLLECTOR_PUBLIC_KEY_HEX),
+		}
+	: undefined;
+if (
+	collectorKey &&
+	(!Number.isInteger(collectorKey.id) ||
+		collectorKey.id < 0 ||
+		collectorKey.id > 255 ||
+		collectorKey.publicKey.length !== 32)
+)
+	throw new Error("Invalid collector HPKE configuration");
+if (collectorKey) {
+	const encoded = Buffer.concat([
+		Buffer.from([collectorKey.id]),
+		collectorKey.publicKey,
+	]);
+	const saved = sql.meta.get("collector")?.value;
+	if (saved && !same(saved, encoded))
+		throw new Error("Database belongs to another collector key");
+	if (!saved) sql.putMeta.run("collector", encoded);
+}
 
 class HttpError extends Error {
 	constructor(status, message) {
@@ -222,7 +298,7 @@ async function helperJob(request, response) {
 				else if (row.collected) value = aggregator.reject(report.reportId, 1);
 				else {
 					sql.claim.run(report.reportId);
-					add(row, report.outputShare);
+					add(row, report.outputShare, report.reportId);
 				}
 			}
 			responses.push(value);
@@ -323,7 +399,13 @@ async function leaderUpload(request, response) {
 				const row = bucket(report.time);
 				if (sql.report.get(report.reportId) || row.collected)
 					throw new HttpError(409, "Report replayed or bucket collected");
-				sql.updateBucket.run(row.share, row.count, row.pending + 1, row.start);
+				sql.updateBucket.run(
+					row.share,
+					row.count,
+					row.pending + 1,
+					row.checksum,
+					row.start,
+				);
 			}
 			sql.leaderJob.run(
 				jobId,
@@ -400,10 +482,16 @@ async function leaderUpload(request, response) {
 				if (sql.report.get(result.reportId) || row.collected)
 					throw new HttpError(409, "Report cannot be committed");
 				sql.claim.run(result.reportId);
-				add(row, result.outputShare, row.pending - 1);
+				add(row, result.outputShare, result.reportId, row.pending - 1);
 			} else {
 				errors.set(result.reportId.toHex(), result.reportError);
-				sql.updateBucket.run(row.share, row.count, row.pending - 1, row.start);
+				sql.updateBucket.run(
+					row.share,
+					row.count,
+					row.pending - 1,
+					row.checksum,
+					row.start,
+				);
 			}
 		}
 		const value = Buffer.concat(
@@ -418,19 +506,177 @@ async function leaderUpload(request, response) {
 	send(response, 200, outbound, "application/ppm-dap;message=upload-errors");
 }
 
-function collect(request, response, url) {
+function collectionInterval(body) {
+	let query;
+	try {
+		query = decodeCollectionJobRequest(body);
+	} catch {
+		throw new HttpError(400, "Invalid collection request");
+	}
+	const start = Number(query.start);
+	if (
+		!Number.isSafeInteger(start) ||
+		query.duration !== 1n ||
+		start >= Math.floor(Date.now() / (task.timePrecision * 1000))
+	)
+		throw new HttpError(400, "Expected one closed time window");
+	return start;
+}
+
+async function helperAggregateShare(request, response) {
 	authenticated(request);
-	const start = Number(url.searchParams.get("start"));
-	if (!Number.isSafeInteger(start) || start < 0)
-		throw new HttpError(400, "Invalid bucket start");
+	media(request, "aggregate-share-req");
+	if (!collectorKey)
+		throw new HttpError(503, "Collector key is not configured");
+	const body = await readBody(request);
+	let query;
+	try {
+		query = decodeAggregateShareRequest(body);
+	} catch {
+		throw new HttpError(400, "Invalid aggregate share request");
+	}
+	const start = collectionInterval(query.collectionRequest);
+	const id = createHash("sha256").update(body).digest("hex");
+	const saved = sql.collectionJob.get(id);
+	if (saved?.response) {
+		send(
+			response,
+			200,
+			saved.response,
+			"application/ppm-dap;message=aggregate-share",
+		);
+		return;
+	}
+	if (sql.collectionForStart.get(start) && !saved)
+		throw new HttpError(409, "Window already has a collection");
+	const row = bucket(start);
+	if (
+		row.pending ||
+		row.count < task.minBatchSize ||
+		!row.checksum ||
+		BigInt(row.count) !== query.reportCount ||
+		!same(row.checksum, query.checksum) ||
+		(row.collected && !saved)
+	)
+		throw new HttpError(409, "Aggregate batch does not match");
+	const encrypted = encodeAggregateShare(
+		await aggregator.encryptShare(
+			query.collectionRequest,
+			owned(row.share),
+			collectorKey,
+		),
+	);
 	const result = transaction(() => {
-		const row = bucket(BigInt(start));
-		if (row.pending || row.count < task.minBatchSize)
-			throw new HttpError(409, "Bucket unavailable");
+		const current = bucket(start);
+		if (
+			current.pending ||
+			current.count !== row.count ||
+			!same(current.checksum, row.checksum)
+		)
+			throw new HttpError(409, "Aggregate batch changed");
+		if (!saved) sql.insertCollection.run(id, body, start);
 		sql.collect.run(start);
-		return { reportCount: row.count, share: owned(row.share).toHex() };
+		sql.finishCollection.run(encrypted, id);
+		return encrypted;
 	});
-	send(response, 200, JSON.stringify(result), "application/json");
+	send(response, 200, result, "application/ppm-dap;message=aggregate-share");
+}
+
+async function collectionJob(request, response, id) {
+	authenticated(request);
+	if (!collectorKey)
+		throw new HttpError(503, "Collector key is not configured");
+	let saved;
+	if (request.method === "POST") {
+		media(request, "collection-job-req");
+		const body = await readBody(request);
+		const start = collectionInterval(body);
+		id = createHash("sha256")
+			.update(body)
+			.digest()
+			.subarray(0, 16)
+			.toString("base64url");
+		saved = sql.collectionJob.get(id);
+		if (saved && !same(saved.request, body))
+			throw new HttpError(409, "Collection ID conflict");
+		if (!saved) {
+			transaction(() => {
+				if (
+					sql.collectionForStart.get(start) ||
+					sql.bucket.get(start)?.collected
+				)
+					throw new HttpError(409, "Window already collected");
+				sql.insertCollection.run(id, body, start);
+			});
+			saved = sql.collectionJob.get(id);
+		}
+	} else {
+		if (!/^[A-Za-z0-9_-]{22}$/.test(id))
+			throw new HttpError(400, "Invalid collection ID");
+		saved = sql.collectionJob.get(id);
+		if (!saved) throw new HttpError(404, "Collection not found");
+	}
+	const location = `/tasks/${task.id}/collection_jobs/${id}`;
+	if (!saved.response) {
+		const row = bucket(saved.start);
+		if (!row.pending && row.count >= task.minBatchSize && row.checksum) {
+			transaction(() => {
+				const current = bucket(saved.start);
+				if (
+					current.pending ||
+					current.count !== row.count ||
+					!same(current.checksum, row.checksum)
+				)
+					throw new HttpError(409, "Collection batch changed");
+				sql.collect.run(saved.start);
+			});
+			const peer = await fetch(
+				new URL(`tasks/${task.id}/aggregate_shares`, process.env.HELPER_URL),
+				{
+					method: "POST",
+					headers: {
+						authorization: `Bearer ${token}`,
+						"content-type": "application/ppm-dap;message=aggregate-share-req",
+					},
+					body: encodeAggregateShareRequest(
+						saved.request,
+						row.count,
+						owned(row.checksum),
+					),
+				},
+			);
+			if (!peer.ok) throw new HttpError(502, `Helper returned ${peer.status}`);
+			const helper = decodeAggregateShare(
+				new Uint8Array(await peer.arrayBuffer()),
+			);
+			const leader = await aggregator.encryptShare(
+				saved.request,
+				owned(row.share),
+				collectorKey,
+			);
+			const value = encodeCollectionJobResponse({
+				reportCount: BigInt(row.count),
+				start: BigInt(saved.start),
+				duration: 1n,
+				leader,
+				helper,
+			});
+			transaction(() => {
+				if (!sql.collectionJob.get(id).response)
+					sql.finishCollection.run(value, id);
+			});
+			saved = sql.collectionJob.get(id);
+		}
+	}
+	send(
+		response,
+		200,
+		saved.response ?? new Uint8Array(),
+		saved.response
+			? "application/ppm-dap;message=collection-job-resp"
+			: "application/octet-stream",
+		{ location, ...(saved.response ? {} : { "retry-after": "1" }) },
+	);
 }
 
 const server = createServer(async (request, response) => {
@@ -454,6 +700,29 @@ const server = createServer(async (request, response) => {
 				"application/json",
 			);
 		else if (
+			request.method === "GET" &&
+			role === "leader" &&
+			url.pathname === "/internal/ready"
+		) {
+			authenticated(request);
+			const before = url.searchParams.get("before");
+			if (
+				!before ||
+				!/^[0-9]+$/.test(before) ||
+				!Number.isSafeInteger(Number(before))
+			)
+				throw new HttpError(400, "Invalid window boundary");
+			send(
+				response,
+				200,
+				JSON.stringify(
+					sql.ready
+						.all(task.minBatchSize, Number(before))
+						.map((row) => row.start),
+				),
+				"application/json",
+			);
+		} else if (
 			request.method === "POST" &&
 			role === "leader" &&
 			url.pathname === `/tasks/${task.id}/reports`
@@ -483,10 +752,23 @@ const server = createServer(async (request, response) => {
 				"application/ppm-dap;message=aggregation-job-resp",
 			);
 		} else if (
+			role === "helper" &&
 			request.method === "POST" &&
-			url.pathname === "/internal/collect"
+			url.pathname === `/tasks/${task.id}/aggregate_shares`
 		)
-			collect(request, response, url);
+			await helperAggregateShare(request, response);
+		else if (
+			role === "leader" &&
+			request.method === "POST" &&
+			url.pathname === `/tasks/${task.id}/collection_jobs`
+		)
+			await collectionJob(request, response);
+		else if (
+			role === "leader" &&
+			request.method === "GET" &&
+			url.pathname.startsWith(`/tasks/${task.id}/collection_jobs/`)
+		)
+			await collectionJob(request, response, url.pathname.split("/").at(-1));
 		else throw new HttpError(404, "Not found");
 	} catch (error) {
 		console.error(error);

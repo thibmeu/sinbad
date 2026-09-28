@@ -80,9 +80,10 @@ The demo reports accepted uploads. Collection and display of aggregate totals ar
 `server/count.js` runs as a leader or helper. Each role has its own SQLite file
 and HPKE key. It puts reports in each upload into one aggregation job,
 saves the exact request, and commits each verified share once. A retry after a
-lost response returns the saved bytes. This example has an internal bucket
-collection endpoint; it does not implement DAP collection jobs.
-The collection `start` parameter is a DAP time-precision unit, not Unix seconds.
+lost response returns the saved bytes. It supports DAP 19 collection jobs and
+encrypts each role's aggregate share to a provisioned collector key. Collection
+closes one completed time window. The collection `start` parameter is a DAP
+time-precision unit, not Unix seconds.
 
 Build the sibling package, install Sinbad, and start both roles:
 
@@ -98,6 +99,19 @@ the DAP 19 configuration returned by `GET /task`; each role serves its HPKE
 config at `GET /hpke_config`. The addresses in the task configuration are
 fixed HTTPS names for local testing, so the caller routes requests to the
 loopback ports. The Compose token and verification key are fixed test values.
+Set `COLLECTOR_PUBLIC_KEY_HEX` to the raw X25519 public key before starting
+Compose to enable collection. The private key stays in a separate backend.
+
+`server/analytics.js` is that backend example. It needs `LEADER_URL`,
+`COLLECTOR_PRIVATE_KEY_HEX`, and `AUTH_TOKEN`; set `DATA_FILE`, `METRIC`,
+`CATEGORY`, and `VDAF` to configure one named metric and its SQLite database.
+Its token must match the leader's token. It retries pending jobs after restarts
+and scans closed windows with committed reports every minute. An authenticated
+`POST /internal/collect?start=...` collects a specific older window.
+`GET /api/analytics?metric=page_views&category=%2Fpricing&from=...&to=...`
+returns completed windows and a `total`; all aggregate values and report counts
+are decimal strings. `from` is inclusive, `to` is exclusive, and both use DAP
+time-precision units. This example configures one task and category per process.
 
 Run `npm run test:aggregate-server` to exercise Count, Sum, and Histogram
 through role restarts, mixed batches, exact retries, and collection. The test
