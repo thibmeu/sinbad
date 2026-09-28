@@ -1,32 +1,27 @@
-import { prio3Count, Task } from "dap-ts";
-import { createCounter } from "sinbad";
-import { Effect } from "effect";
+import { Sinbad } from "sinbad";
 
 const status = document.querySelector("#status");
-const button = document.querySelector("#count");
+const button = document.querySelector("#track");
 
 try {
-  const response = await fetch("/config.json");
-  if (!response.ok) throw new Error(`Configuration: HTTP ${response.status}`);
-  const config = await response.json();
-  const task = Task.create({ ...config, vdaf: prio3Count() });
   const proxyFetch = (input) => {
     const request = new Request(input);
     const url = new URL(request.url);
+    if (url.origin === location.origin) return fetch(request);
     const role = url.hostname;
     if (role !== "leader" && role !== "helper") throw new Error("Unknown DAP endpoint");
     const proxy = new URL(`/${role}${url.pathname}${url.search}`, location.origin);
     return fetch(new Request(proxy, request));
   };
-  const count = await Effect.runPromise(createCounter(task, { fetch: proxyFetch }));
+  await Sinbad.init({ siteId: "demo", endpoint: location.origin, fetch: proxyFetch });
   button.disabled = false;
   status.textContent = "Ready";
   button.addEventListener("click", async () => {
     button.disabled = true;
     status.textContent = "Sending…";
     try {
-      const result = await Effect.runPromise(count());
-      status.textContent = result.ok ? "Count report accepted" : "Count report rejected";
+      const result = await Sinbad.track("click");
+      status.textContent = result.ok ? "Event accepted" : "Event rejected";
     } catch (error) {
       status.textContent = error instanceof Error ? error.message : "Upload failed";
     } finally {

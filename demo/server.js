@@ -3,7 +3,6 @@ import { readFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { prio3Count, Task } from "dap-ts";
 import { fetchHpkeConfigs } from "sinbad/fetch";
-import { Effect } from "effect";
 
 const origin = process.env.PUBLIC_ORIGIN ?? "http://localhost:8080";
 const leaderUrl = process.env.LEADER_URL ?? "http://127.0.0.1:9001/";
@@ -67,7 +66,7 @@ async function provision() {
   let hpke;
   for (let attempt = 0; attempt < 60; attempt++) {
     try {
-      hpke = await Effect.runPromise(fetchHpkeConfigs(task, { fetch: internalFetch }));
+      hpke = await fetchHpkeConfigs(task, { fetch: internalFetch });
       break;
     } catch (error) {
       if (attempt === 59) throw error;
@@ -102,9 +101,9 @@ const files = {
 const server = createServer(async (request, response) => {
   try {
     const path = new URL(request.url, publicUrl).pathname;
-    if (request.method === "GET" && path === "/config.json") {
+    if (request.method === "GET" && path === "/sites/demo/manifest") {
       response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
-      response.end(JSON.stringify(config));
+      response.end(JSON.stringify({ events: { click: { ...config, vdaf: "count" } } }));
       return;
     }
     if (request.method === "GET" && files[path]) {

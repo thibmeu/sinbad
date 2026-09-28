@@ -3,32 +3,37 @@
 A small analytics library and Fetch transport for [dap-ts](https://github.com/thibmeu/dap-ts).
 
 ```js
-import { prio3Count, Task } from "dap-ts";
-import { createCounter } from "sinbad";
-import { Effect } from "effect";
+import { Sinbad } from "sinbad";
 
-const task = Task.create({
-  id: "8BY0RzZMzxvA46_8ymhzycOB9krN-QIGYvg_RsByGec",
-  info: "page-views-v1",
-  leader: "https://leader.example/",
-  helper: "https://helper.example/",
-  timePrecision: 60,
-  minBatchSize: 100,
-  batchMode: "time-interval",
-  vdaf: prio3Count(),
-});
-const count = await Effect.runPromise(createCounter(task));
-const result = await Effect.runPromise(count());
-if (!result.ok) console.warn(result.rejected);
+await Sinbad.init({ siteId: "my-site", endpoint: "https://analytics.example/" });
+await Sinbad.page();
+await Sinbad.track("signup");
+await Sinbad.track("purchase", { value: 49 });
 ```
 
-The task must already be provisioned on both aggregators. Each call sends one Prio3Count measurement with value `1`. `createCounter` fetches the leader and helper HPKE configurations once. It accepts a custom `fetch`, request `headers`, and an abort `signal`. It returns an Effect whose counter returns an Effect of dap-ts's upload result. Effects are lazy; run them at the application edge with `Effect.runPromise` or compose them with other Effects.
+`init` fetches `GET https://analytics.example/sites/my-site/manifest`. The service must provide provisioned DAP tasks for the site's named events and pages. `page()` uses `location.pathname` in a browser; pass a path in other runtimes. `track("purchase", { value: 49 })` sends an encrypted bounded Sum measurement. The value must be an integer in units chosen by the site, such as cents. Count events and pages send encrypted `1` measurements. Calls return Promises of dap-ts upload results, so callers can inspect `result.ok` or handle network errors. Unknown names and unsupported properties fail.
+
+The manifest is JSON. Each entry contains a task configuration plus `vdaf: "count"` or `vdaf: "sum"`; Sum entries also contain `maxMeasurement`. For example:
+
+```json
+{
+  "events": {
+    "signup": { "id": "<task-id>", "leader": "https://leader.example/", "helper": "https://helper.example/", "timePrecision": 60, "minBatchSize": 100, "batchMode": "time-interval", "vdaf": "count" },
+    "purchase": { "id": "<task-id>", "leader": "https://leader.example/", "helper": "https://helper.example/", "timePrecision": 60, "minBatchSize": 100, "batchMode": "time-interval", "vdaf": "sum", "maxMeasurement": 10000 }
+  },
+  "pages": {
+    "/pricing": { "id": "<task-id>", "leader": "https://leader.example/", "helper": "https://helper.example/", "timePrecision": 60, "minBatchSize": 100, "batchMode": "time-interval", "vdaf": "count" }
+  }
+}
+```
+
+Replace each `<task-id>` with a separate provisioned task ID. Event names and paths select tasks locally; aggregators receive task IDs and encrypted reports. Other event properties and user identities are not supported. `createCounter(task)` remains available when the caller already has a Count task object.
 
 ## Fetch transport
 
 `sinbad/fetch` exports `fetchHpkeConfigs(task)`, `execute(preparedUpload)`,
 `toRequest()`, and `fromResponse()`. The first two accept a custom Fetch
-implementation, headers, and an abort signal. All async operations return Effects. `execute()` sends an existing
+implementation, headers, and an abort signal. All async operations return Promises. `execute()` sends an existing
 upload once; callers decide whether to retry it.
 
 `sinbad/collector` exports `collect(collector, queryOrState)` and
@@ -38,12 +43,11 @@ collector private key belong on a backend:
 ```js
 import { Collector } from "dap-ts";
 import { collect } from "sinbad/collector";
-import { Effect } from "effect";
 
 const collector = await Collector.create(task, { configId, privateKey });
-const progress = await Effect.runPromise(collect(collector, { start: batchStart, duration: 1 }, {
+const progress = await collect(collector, { start: batchStart, duration: 1 }, {
   headers: { authorization: `Bearer ${collectorToken}` },
-}));
+});
 if (progress.status === "pending") saveForLater(progress.state);
 else console.log(progress.count ?? progress.sum);
 ```
