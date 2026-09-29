@@ -2,7 +2,10 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "rootDir": ".",
-    "noEmit": true
+    "noEmit": true,
+    "lib": ["ESNext", "DOM"],
+    "allowImportingTsExtensions": true,
+    "types": ["node"]
   },
-  "include": ["src", "test/types.assert.ts"]
+  "include": ["src", "server", "test", "bench", "demo"]
 }

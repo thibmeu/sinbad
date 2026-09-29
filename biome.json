@@ -1,4 +1,7 @@
 {
+  "files": {
+    "includes": ["**", "!demo/app.bundle.js"]
+  },
   "linter": {
     "rules": {
       "style": {

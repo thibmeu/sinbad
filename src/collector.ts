@@ -1,33 +1,30 @@
-import type {
-	CollectionProgress,
-	CollectionQuery,
-	CollectionState,
-	Collector,
-	PreparedCollection,
+import {
+	type CollectionProgress,
+	type CollectionQuery,
+	type CollectionState,
+	type Collector,
+	DAPError,
+	type PreparedCollection,
+	type Vdaf,
 } from "dap-ts";
-import { DAPError } from "dap-ts";
-import { type FetchOptions, fromResponse, toRequest } from "./fetch.js";
+import { type FetchOptions, send } from "./fetch.ts";
 
 export interface CollectionFetchOptions extends FetchOptions {
-	/** Authentication headers, if required by the deployment. */
-	readonly headers?: HeadersInit;
 	readonly maxPolls?: number;
 	readonly minDelayMs?: number;
 	readonly maxDelayMs?: number;
 }
 
 /** Execute one prepared POST or GET. Save a pending result's state before polling. */
-export async function executeCollection(
-	prepared: PreparedCollection,
+export async function executeCollection<V extends Vdaf>(
+	prepared: PreparedCollection<V>,
 	options: CollectionFetchOptions = {},
-): Promise<CollectionProgress> {
-	options.signal?.throwIfAborted();
-	const response = await (options.fetch ?? globalThis.fetch)(
-		toRequest(prepared.request, options),
+): Promise<CollectionProgress<V>> {
+	const progress = await prepared.process(
+		await send(prepared.request, options),
 	);
-	const data = await fromResponse(response, options);
 	options.signal?.throwIfAborted();
-	return prepared.process(data);
+	return progress;
 }
 
 function wait(ms: number, signal?: AbortSignal): Promise<void> {
@@ -52,11 +49,11 @@ function wait(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 /** Start or resume a collection and return pending state when the poll limit is reached. */
-export async function collect(
-	collector: Collector,
+export async function collect<V extends Vdaf>(
+	collector: Collector<V>,
 	queryOrState: CollectionQuery | CollectionState,
 	options: CollectionFetchOptions = {},
-): Promise<CollectionProgress> {
+): Promise<CollectionProgress<V>> {
 	const maxPolls = options.maxPolls ?? 20;
 	const minDelayMs = options.minDelayMs ?? 1000;
 	const maxDelayMs = options.maxDelayMs ?? 60000;

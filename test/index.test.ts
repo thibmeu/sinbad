@@ -1,7 +1,7 @@
-import { prio3Count, Task } from "dap-ts";
+import { prio3Count, prio3Histogram, prio3Sum, Task, type Vdaf } from "dap-ts";
 import { decodeUploadRequest, encodeHpkeConfigList } from "dap-ts/messages";
 import { expect, it, vi } from "vitest";
-import { createCounter, createSiteAnalytics, Sinbad } from "../src/index.js";
+import { createSiteAnalytics, Sinbad } from "../src/index.ts";
 
 const configList = encodeHpkeConfigList([
 	{
@@ -14,89 +14,79 @@ const configList = encodeHpkeConfigList([
 		),
 	},
 ]);
+const hpkeResponse = () =>
+	new Response(configList, {
+		headers: { "content-type": "application/ppm-dap;message=hpke-config-list" },
+	});
 
-it("fetches HPKE configs once and uploads fresh count reports", async () => {
+/** A manifest entry: task ID and TaskConfiguration in URL-safe Base 64. */
+function entry(fill: number, vdaf: Vdaf) {
 	const task = Task.create({
-		id: "8BY0RzZMzxvA46_8ymhzycOB9krN-QIGYvg_RsByGec",
+		id: new Uint8Array(32).fill(fill).toBase64({
+			alphabet: "base64url",
+			omitPadding: true,
+		}),
 		leader: "https://leader.example/",
 		helper: "https://helper.example/",
-		timePrecision: 60,
+		timePrecision: 3600,
 		minBatchSize: 100,
 		batchMode: "time-interval",
-		vdaf: prio3Count(),
+		vdaf,
 	});
-	const list = encodeHpkeConfigList([
-		{
-			id: 1,
-			kemId: 32,
-			kdfId: 1,
-			aeadId: 1,
-			publicKey: Uint8Array.fromHex(
-				"37fda3567bdbd628e88668c3c8d7e97fa41e9b4fc1409b43f8f051270229af08",
-			),
-		},
-	]);
+	return {
+		id: task.id,
+		configuration: task.encodeConfiguration().toBase64({
+			alphabet: "base64url",
+			omitPadding: true,
+		}),
+	};
+}
+
+/** A fake site: serves the manifest and HPKE lists, and lets `upload` answer reports. */
+function site(
+	manifest: unknown,
+	upload: (request: Request) => Promise<Response> = async () =>
+		new Response(null),
+) {
 	const requests: Request[] = [];
 	const fetch = vi.fn(async (request: Request) => {
-		requests.push(request);
-		if (request.method === "GET") {
-			return new Response(list, {
-				headers: {
-					"content-type": "application/ppm-dap;message=hpke-config-list",
-				},
-			});
-		}
-		return new Response(null, { status: 200 });
+		requests.push(request.clone());
+		if (request.url.endsWith("/manifest")) return Response.json(manifest);
+		if (request.method === "GET") return hpkeResponse();
+		return upload(request);
 	});
-	const count = await createCounter(task, { fetch, batchMs: 0 });
-	expect((await count()).accepted).toHaveLength(1);
-	expect((await count()).accepted).toHaveLength(1);
-	expect(requests.map((request) => request.method)).toEqual([
-		"GET",
-		"GET",
-		"POST",
-		"POST",
-	]);
-	expect(new Uint8Array(await requests[2]!.arrayBuffer())).not.toEqual(
-		new Uint8Array(await requests[3]!.arrayBuffer()),
-	);
+	return {
+		fetch,
+		requests,
+		posts: () => requests.filter((r) => r.method === "POST"),
+	};
+}
+
+it("queues calls made before init and sends them once it resolves", async () => {
+	const { fetch, posts } = site({ events: { early: entry(9, prio3Count()) } });
+	const early = Sinbad.track("early");
+	await Promise.resolve();
+	expect(fetch).not.toHaveBeenCalled();
+	await Sinbad.init({
+		siteId: "early",
+		endpoint: "https://analytics.example/",
+		fetch,
+		batchMs: 0,
+	});
+	expect(await early).toMatchObject({ ok: true, sent: true });
+	expect(posts()).toHaveLength(1);
 });
 
-it("initializes a site manifest and sends count, page, and bounded sum reports", async () => {
-	const countId = "8BY0RzZMzxvA46_8ymhzycOB9krN-QIGYvg_RsByGec";
-	const pageId = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-	const sumId = btoa(
-		String.fromCharCode(...new Uint8Array(32).fill(3)),
-	).replace(/=+$/, "");
-	const base = {
-		leader: "https://leader.example/",
-		helper: "https://helper.example/",
-		timePrecision: 60,
-		minBatchSize: 100,
-		batchMode: "time-interval",
-	};
+it("initializes a site manifest and sends count, page, sum, and histogram reports", async () => {
+	const count = entry(1, prio3Count());
+	const page = entry(2, prio3Count());
+	const sum = entry(3, prio3Sum(100));
+	const histogram = entry(4, prio3Histogram(4, 2));
 	const manifest = {
-		events: {
-			signup: { ...base, id: countId, vdaf: "count" },
-			purchase: { ...base, id: sumId, vdaf: "sum", maxMeasurement: 100 },
-		},
-		pages: { "/pricing": { ...base, id: pageId, vdaf: "count" } },
+		events: { signup: count, purchase: sum, plan: histogram },
+		pages: { "/pricing": page },
 	};
-	const requests: Request[] = [];
-	const fetch = vi.fn(async (request: Request) => {
-		requests.push(request);
-		if (request.url.endsWith("/manifest"))
-			return new Response(JSON.stringify(manifest), {
-				headers: { "content-type": "application/json" },
-			});
-		if (request.method === "GET")
-			return new Response(configList, {
-				headers: {
-					"content-type": "application/ppm-dap;message=hpke-config-list",
-				},
-			});
-		return new Response(null, { status: 200 });
-	});
+	const { fetch, requests, posts } = site(manifest);
 	await expect(
 		Sinbad.init({
 			siteId: "../other",
@@ -115,8 +105,7 @@ it("initializes a site manifest and sends count, page, and bounded sum reports",
 	expect(requests.map((request) => request.url)).toEqual([
 		"https://analytics.example/sites/my-site/manifest",
 	]);
-
-	expect((await Sinbad.track("signup")).accepted).toHaveLength(1);
+	expect(await Sinbad.track("signup")).toMatchObject({ ok: true, sent: true });
 	// The first report fetched both HPKE lists; later tasks reuse them.
 	expect(requests.filter((request) => request.method === "GET")).toHaveLength(
 		3,
@@ -128,22 +117,19 @@ it("initializes a site manifest and sends count, page, and bounded sum reports",
 	} finally {
 		vi.unstubAllGlobals();
 	}
-	expect((await Sinbad.track("purchase", { value: 49 })).accepted).toHaveLength(
-		1,
-	);
+	expect((await Sinbad.track("purchase", { value: 49 })).ok).toBe(true);
+	expect((await Sinbad.track("plan", { value: 3 })).ok).toBe(true);
 	expect(requests.filter((request) => request.method === "GET")).toHaveLength(
 		3,
 	);
-	const uploads = requests.filter((request) => request.method === "POST");
-	expect(uploads.map((request) => request.url)).toEqual([
-		expect.stringContaining(countId),
-		expect.stringContaining(pageId),
-		expect.stringContaining(pageId),
-		expect.stringContaining(sumId),
-	]);
+	expect(posts().map((request) => request.url)).toEqual(
+		[count, page, page, sum, histogram].map((task) =>
+			expect.stringContaining(task.id),
+		),
+	);
 
-	// Unknown names and unusable properties warn and do nothing; an analytics
-	// call must not break the page it runs on.
+	// Unknown names and unusable properties warn and send nothing; an
+	// analytics call must not break the page it runs on.
 	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 	try {
 		for (const call of [
@@ -153,48 +139,25 @@ it("initializes a site manifest and sends count, page, and bounded sum reports",
 			Sinbad.page("/missing"),
 			Sinbad.track("purchase", { value: 49, extra: 1 } as { value: number }),
 		])
-			expect(await call).toMatchObject({ ok: true, accepted: [] });
+			expect(await call).toEqual({
+				ok: false,
+				sent: false,
+				accepted: [],
+				rejected: [],
+			});
 		expect(warn).toHaveBeenCalledTimes(5);
 	} finally {
 		warn.mockRestore();
 	}
 	// A measurement outside the task bound is a real error and still rejects.
 	await expect(Sinbad.track("purchase", { value: 101 })).rejects.toThrow();
-	expect(requests.filter((request) => request.method === "POST")).toHaveLength(
-		4,
-	);
+	await expect(Sinbad.track("plan", { value: 4 })).rejects.toThrow();
+	expect(posts()).toHaveLength(5);
 });
 
 it("batches reports for one task into a single upload", async () => {
-	const manifest = {
-		events: {
-			click: {
-				id: "8BY0RzZMzxvA46_8ymhzycOB9krN-QIGYvg_RsByGec",
-				leader: "https://leader.example/",
-				helper: "https://helper.example/",
-				timePrecision: 60,
-				minBatchSize: 100,
-				batchMode: "time-interval",
-				vdaf: "count",
-			},
-		},
-	};
-	const requests: Request[] = [];
-	const fetch = vi.fn(async (request: Request) => {
-		requests.push(request);
-		if (request.url.endsWith("/manifest"))
-			return new Response(JSON.stringify(manifest), {
-				headers: { "content-type": "application/json" },
-			});
-		if (request.method === "GET")
-			return new Response(configList, {
-				headers: {
-					"content-type": "application/ppm-dap;message=hpke-config-list",
-				},
-			});
-		return new Response(null, { status: 200 });
-	});
-	const site = await createSiteAnalytics({
+	const { fetch, posts } = site({ events: { click: entry(1, prio3Count()) } });
+	const analytics = await createSiteAnalytics({
 		siteId: "batch",
 		endpoint: "https://analytics.example/",
 		fetch,
@@ -202,98 +165,128 @@ it("batches reports for one task into a single upload", async () => {
 	});
 	try {
 		const results = await Promise.all([
-			site.track("click"),
-			site.track("click"),
-			site.track("click"),
+			analytics.track("click"),
+			analytics.track("click"),
+			analytics.track("click"),
 		]);
 		for (const result of results) expect(result.ok).toBe(true);
-		const uploads = requests.filter((request) => request.method === "POST");
-		expect(uploads).toHaveLength(1);
-		// Three concatenated reports in one upload-req.
+		expect(posts()).toHaveLength(1);
 		expect(
-			decodeUploadRequest(new Uint8Array(await uploads[0]!.arrayBuffer())),
+			decodeUploadRequest(new Uint8Array(await posts()[0]!.arrayBuffer())),
 		).toHaveLength(3);
 	} finally {
-		site.close();
+		analytics.close();
 	}
 });
 
-it("refetches HPKE configs once after hpke_unknown_config_id", async () => {
-	const manifest = {
-		events: {
-			click: {
-				id: "8BY0RzZMzxvA46_8ymhzycOB9krN-QIGYvg_RsByGec",
-				leader: "https://leader.example/",
-				helper: "https://helper.example/",
-				timePrecision: 60,
-				minBatchSize: 100,
-				batchMode: "time-interval",
-				vdaf: "count",
-			},
-		},
-	};
-	let uploads = 0;
-	let gets = 0;
-	let failures = 1;
-	const fetch = vi.fn(async (request: Request) => {
-		if (request.url.endsWith("/manifest"))
-			return new Response(JSON.stringify(manifest), {
-				headers: { "content-type": "application/json" },
-			});
-		if (request.method === "GET") {
-			gets++;
-			return new Response(configList, {
-				headers: {
-					"content-type": "application/ppm-dap;message=hpke-config-list",
-				},
-			});
-		}
-		uploads++;
-		if (failures <= 0) return new Response(null, { status: 200 });
-		failures--;
-		// DAP 19, 4.4.2.2: the Leader does not know this config ID.
+it("sends what is queued with keepalive when the page is hidden", async () => {
+	const listeners = new Map<string, () => void>();
+	vi.stubGlobal("addEventListener", (type: string, listener: () => void) =>
+		listeners.set(type, listener),
+	);
+	vi.stubGlobal("removeEventListener", (type: string) =>
+		listeners.delete(type),
+	);
+	const { fetch, posts } = site({ events: { click: entry(1, prio3Count()) } });
+	try {
+		const analytics = await createSiteAnalytics({
+			siteId: "unload",
+			endpoint: "https://analytics.example/",
+			fetch,
+			batchMs: 60_000,
+		});
+		const pending = analytics.track("click");
+		listeners.get("pagehide")!();
+		expect((await pending).ok).toBe(true);
+		expect(posts()[0]!.keepalive).toBe(true);
+		analytics.close();
+		expect(listeners.size).toBe(0);
+	} finally {
+		vi.unstubAllGlobals();
+	}
+});
+
+/** Answer hpke_unknown_config_id for the reports `reject` picks. */
+const staleConfig =
+	(reject: (index: number) => boolean) => async (request: Request) => {
 		const reports = decodeUploadRequest(
 			new Uint8Array(await request.arrayBuffer()),
 		);
-		const errors = new Uint8Array(17 * reports.length);
-		reports.forEach((report, index) => {
-			errors.set(report.metadata.id, index * 17);
-			errors[index * 17 + 16] = 4;
-		});
-		return new Response(errors, {
+		const errors = reports.flatMap((report, index) =>
+			reject(index) ? [...report.metadata.id, 4] : [],
+		);
+		return new Response(errors.length ? Uint8Array.from(errors) : null, {
 			headers: { "content-type": "application/ppm-dap;message=upload-errors" },
 		});
-	});
-	const site = await createSiteAnalytics({
+	};
+
+it("refetches HPKE configs once after hpke_unknown_config_id and retries only those reports", async () => {
+	let failures = 1;
+	const { fetch, requests, posts } = site(
+		{ events: { click: entry(1, prio3Count()) } },
+		async (request) =>
+			failures-- > 0
+				? staleConfig((index) => index === 1)(request)
+				: new Response(null),
+	);
+	const analytics = await createSiteAnalytics({
 		siteId: "rotate",
 		endpoint: "https://analytics.example/",
 		fetch,
-		batchMs: 0,
+		batchMs: 20,
 	});
 	try {
-		expect((await site.track("click")).ok).toBe(true);
-		expect(uploads).toBe(2);
+		const results = await Promise.all([
+			analytics.track("click"),
+			analytics.track("click"),
+		]);
+		expect(results.map((result) => result.ok)).toEqual([true, true]);
+		expect(posts()).toHaveLength(2);
+		// The retry carries only the rejected report, so none is counted twice.
+		expect(
+			decodeUploadRequest(new Uint8Array(await posts()[1]!.arrayBuffer())),
+		).toHaveLength(1);
 		// Both lists were discarded and retrieved again for the retry.
-		expect(gets).toBe(4);
+		expect(requests.filter((r) => r.url.endsWith("hpke_config"))).toHaveLength(
+			4,
+		);
 	} finally {
-		site.close();
+		analytics.close();
 	}
 
 	// When the retry fails too, the client gives up rather than looping.
-	uploads = 0;
-	failures = Number.POSITIVE_INFINITY;
-	const stubborn = await createSiteAnalytics({
+	const stubborn = site(
+		{ events: { click: entry(1, prio3Count()) } },
+		staleConfig(() => true),
+	);
+	const again = await createSiteAnalytics({
 		siteId: "rotate",
 		endpoint: "https://analytics.example/",
-		fetch,
+		fetch: stubborn.fetch,
 		batchMs: 0,
 	});
 	try {
-		const result = await stubborn.track("click");
+		const result = await again.track("click");
 		expect(result.ok).toBe(false);
-		expect(result.rejected[0]?.code).toBe("hpke-unknown-config-id");
-		expect(uploads).toBe(2);
+		expect(result.rejected[0]?.error).toBe("hpke-unknown-config-id");
+		expect(stubborn.posts()).toHaveLength(2);
 	} finally {
-		stubborn.close();
+		again.close();
 	}
+});
+
+it("rejects manifests that do not decode into tasks", async () => {
+	for (const manifest of [
+		{},
+		{ events: { click: { id: "x", configuration: "AA" } } },
+		{ events: { click: { ...entry(1, prio3Count()), configuration: 3 } } },
+		{ pages: { "/": entry(1, prio3Sum(5)) } },
+	])
+		await expect(
+			createSiteAnalytics({
+				siteId: "bad",
+				endpoint: "https://analytics.example/",
+				fetch: site(manifest).fetch,
+			}),
+		).rejects.toThrow();
 });

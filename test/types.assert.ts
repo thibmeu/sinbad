@@ -1,7 +1,7 @@
-import { prio3Count, prio3Sum, Task } from "dap-ts";
-import { collect } from "../src/collector.js";
-import { fetchHpkeConfigs } from "../src/fetch.js";
-import { createCounter, Sinbad } from "../src/index.js";
+import { Collector, prio3Count, prio3Histogram, Task } from "dap-ts";
+import { collect } from "../src/collector.ts";
+import { fetchHpkeConfigs } from "../src/fetch.ts";
+import { Sinbad } from "../src/index.ts";
 
 export async function checkTypes() {
 	const options = {
@@ -13,16 +13,23 @@ export async function checkTypes() {
 		batchMode: "time-interval" as const,
 	};
 	const task = Task.create({ ...options, vdaf: prio3Count() });
-	const count = await createCounter(task);
-	const result = await count();
-	result.accepted;
 	await Sinbad.init({ siteId: "site", endpoint: "https://analytics.example/" });
-	(await Sinbad.track("signup")).accepted;
+	const result = await Sinbad.track("signup");
+	const sent: boolean = result.sent;
 	(await Sinbad.track("purchase", { value: 49 })).accepted;
 	(await Sinbad.page("/")).accepted;
 	await fetchHpkeConfigs(task);
-	// @ts-expect-error Sinbad's counter only accepts count tasks.
-	await createCounter(Task.create({ ...options, vdaf: prio3Sum(10) }));
+	const histogram = Task.create({ ...options, vdaf: prio3Histogram(4, 2) });
+	const collector = await Collector.create(histogram, {
+		configId: 1,
+		privateKey: new Uint8Array(32),
+	});
+	const progress = await collect(collector, { start: 0, end: 60_000 });
+	if (progress.status === "complete") {
+		const buckets: readonly bigint[] = progress.value;
+		void buckets;
+	}
 	// @ts-expect-error A collector is required to collect a batch.
-	await collect(task, { start: 0, duration: 1 });
+	await collect(task, { start: 0, end: 60_000 });
+	return sent;
 }

@@ -18,6 +18,10 @@
     "./collector": {
       "types": "./dist/collector.d.ts",
       "default": "./dist/collector.js"
+    },
+    "./aggregator": {
+      "types": "./dist/aggregator.d.ts",
+      "default": "./dist/aggregator.js"
     }
   },
   "files": [
@@ -29,20 +33,20 @@
     "build": "tsc",
     "prepare": "npm run build",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
-    "lint": "biome check src test server bench",
-    "format": "biome format --write src test server bench",
-    "build:demo": "npm run build && esbuild demo/app.js --bundle --format=esm --outfile=demo/app.bundle.js",
-    "demo": "npm run build:demo && node demo/server.js",
+    "lint": "biome check src test server bench demo",
+    "format": "biome format --write src test server bench demo",
+    "build:demo": "npm run build && esbuild demo/app.ts --bundle --format=esm --outfile=demo/app.bundle.js",
+    "demo": "npm run build:demo && node demo/server.ts",
     "test": "vitest run",
-    "test:count-server": "node test/count-server.mjs",
-    "test:aggregate-server": "node test/count-server.mjs && node test/count-server.mjs sum && node test/count-server.mjs histogram",
-    "bench:count": "node bench/count.mjs"
+    "test:aggregate-server": "node test/aggregate-server.ts count && node test/aggregate-server.ts sum && node test/aggregate-server.ts histogram",
+    "bench:count": "node bench/count.ts"
   },
   "peerDependencies": {
     "dap-ts": "*"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.13",
+    "@types/node": "26.6.3",
     "dap-ts": "file:../dap-ts",
     "esbuild": "0.28.2",
     "typescript": "7.0.2",

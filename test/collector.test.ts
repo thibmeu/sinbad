@@ -1,17 +1,19 @@
 import type { Collector, PreparedCollection } from "dap-ts";
 import { expect, it, vi } from "vitest";
-import { collect, executeCollection } from "../src/collector.js";
+import { collect, executeCollection } from "../src/collector.ts";
 
 const location = "https://leader.example/tasks/task/collection_jobs/job";
 
 function pending(method: "POST" | "GET"): PreparedCollection {
 	return {
-		request: { method, url: location, headers: {} },
+		get request() {
+			return new Request(location, { method });
+		},
 		process: async (response) => {
 			if (response.status !== 200) throw new Error("Unexpected status");
 			return {
 				status: "pending",
-				state: { location, start: "10", duration: "2" },
+				state: { location, start: 600_000, end: 720_000 },
 				retryAfter: 0,
 			};
 		},
@@ -30,7 +32,7 @@ it("polls with authentication and returns resumable state at the limit", async (
 	});
 	const result = await collect(
 		collector,
-		{ start: 10, duration: 2 },
+		{ start: 600_000, end: 720_000 },
 		{
 			fetch,
 			headers: { authorization: "Bearer test" },
@@ -61,7 +63,7 @@ it("stops polling on cancellation and long Retry-After", async () => {
 	await expect(
 		collect(
 			collector,
-			{ start: 10, duration: 2 },
+			{ start: 600_000, end: 720_000 },
 			{
 				fetch: abortingFetch,
 				signal: controller.signal,
@@ -75,14 +77,14 @@ it("stops polling on cancellation and long Retry-After", async () => {
 			...pending("POST"),
 			process: async () => ({
 				status: "pending" as const,
-				state: { location, start: "10", duration: "2" },
+				state: { location, start: 600_000, end: 720_000 },
 				retryAfter: 300,
 			}),
 		}),
-	} as Collector;
+	} as unknown as Collector;
 	const fetch = vi.fn(async () => new Response(null, { status: 200 }));
 	expect(
-		(await collect(slow, { start: 10, duration: 2 }, { fetch })).status,
+		(await collect(slow, { start: 600_000, end: 720_000 }, { fetch })).status,
 	).toBe("pending");
 	expect(fetch).toHaveBeenCalledTimes(1);
 });

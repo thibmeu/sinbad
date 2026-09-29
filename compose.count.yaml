@@ -2,13 +2,14 @@ services:
   leader:
     image: node:26-alpine
     working_dir: /work/sinbad
-    command: ["node", "server/count.js"]
+    command: ["node", "server/aggregator.ts"]
     environment:
       ROLE: leader
       HOST: 0.0.0.0
       PORT: 8080
       DATA_FILE: /data/${VDAF:-count}.sqlite
       VDAF: ${VDAF:-count}
+      MIN_BATCH_SIZE: ${MIN_BATCH_SIZE:-1}
       HISTOGRAM_LENGTH: ${HISTOGRAM_LENGTH:-4}
       HISTOGRAM_CHUNK_LENGTH: ${HISTOGRAM_CHUNK_LENGTH:-2}
       HELPER_URL: http://helper:8080/
@@ -26,13 +27,14 @@ services:
   helper:
     image: node:26-alpine
     working_dir: /work/sinbad
-    command: ["node", "server/count.js"]
+    command: ["node", "server/aggregator.ts"]
     environment:
       ROLE: helper
       HOST: 0.0.0.0
       PORT: 8080
       DATA_FILE: /data/${VDAF:-count}.sqlite
       VDAF: ${VDAF:-count}
+      MIN_BATCH_SIZE: ${MIN_BATCH_SIZE:-1}
       HISTOGRAM_LENGTH: ${HISTOGRAM_LENGTH:-4}
       HISTOGRAM_CHUNK_LENGTH: ${HISTOGRAM_CHUNK_LENGTH:-2}
       AUTH_TOKEN: local-count-token
