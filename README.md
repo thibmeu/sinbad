@@ -67,6 +67,15 @@ else console.log(progress.count ?? progress.sum);
 The package builds ESM JavaScript and TypeScript declarations from strict
 TypeScript source. The demo remains plain HTML, CSS, and JavaScript.
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs the unit tests, typecheck, lint, build, demo
+bundle, and the Count, Sum, and Histogram loopback aggregator tests. It builds
+against a checkout of the sibling dap-ts repository. Because both repositories
+are private, the default `GITHUB_TOKEN` cannot read dap-ts, so the workflow
+needs a repository secret `DAP_TS_TOKEN` holding a token with read access to
+it. Without that secret the workflow skips instead of failing on every push.
+
 ## Local demo
 
 The demo is plain HTML, CSS, and JavaScript. It uses the pinned Janus interop image from the dap-ts test suite. Janus in this image speaks DAP 18, so the demo uses dap-ts's explicit test-only compatibility option. It is for local development.
