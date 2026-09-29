@@ -105,38 +105,47 @@ export async function execute(
 	return upload.process(data);
 }
 
+/**
+ * Retrieve one Aggregator's list. Tasks that share an Aggregator share this
+ * resource, so callers should cache it by base URL rather than by task.
+ */
+export async function fetchHpkeConfig(
+	base: string,
+	options: FetchOptions = {},
+	dapVersion: 18 | 19 = 19,
+): Promise<HpkeConfigList> {
+	options.signal?.throwIfAborted();
+	const response = await (options.fetch ?? globalThis.fetch)(
+		toRequest(
+			{
+				method: "GET",
+				url: resource(base, "hpke_config"),
+				headers: { accept: "application/ppm-dap;message=hpke-config-list" },
+			},
+			options,
+		),
+	);
+	const data = await fromResponse(response, {
+		maxResponseSize: Math.min(options.maxResponseSize ?? 65537, 65537),
+	});
+	options.signal?.throwIfAborted();
+	if (data.status < 200 || data.status >= 300)
+		throw new DAPError(
+			"HttpError",
+			`HPKE config request failed with HTTP ${data.status}`,
+		);
+	checkMediaType(data.headers, "hpke-config-list", dapVersion);
+	return HpkeConfigList.parse(data.body);
+}
+
 /** Retrieve both lists explicitly; retain every advertised suite for inspection. */
 export async function fetchHpkeConfigs(
 	task: Task<unknown>,
 	options: FetchOptions = {},
 ): Promise<AggregatorHpkeConfigs> {
-	options.signal?.throwIfAborted();
-	const get = async (base: string): Promise<HpkeConfigList> => {
-		const response = await (options.fetch ?? globalThis.fetch)(
-			toRequest(
-				{
-					method: "GET",
-					url: resource(base, "hpke_config"),
-					headers: { accept: "application/ppm-dap;message=hpke-config-list" },
-				},
-				options,
-			),
-		);
-		const data = await fromResponse(response, {
-			maxResponseSize: Math.min(options.maxResponseSize ?? 65537, 65537),
-		});
-		options.signal?.throwIfAborted();
-		if (data.status < 200 || data.status >= 300)
-			throw new DAPError(
-				"HttpError",
-				`HPKE config request failed with HTTP ${data.status}`,
-			);
-		checkMediaType(data.headers, "hpke-config-list", task.dapVersion);
-		return HpkeConfigList.parse(data.body);
-	};
 	const [leader, helper] = await Promise.all([
-		get(task.leader),
-		get(task.helper),
+		fetchHpkeConfig(task.leader, options, task.dapVersion),
+		fetchHpkeConfig(task.helper, options, task.dapVersion),
 	]);
 	return Object.freeze({ leader, helper });
 }

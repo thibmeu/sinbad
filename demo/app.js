@@ -13,7 +13,8 @@ try {
     const proxy = new URL(`/${role}${url.pathname}${url.search}`, location.origin);
     return fetch(new Request(proxy, request));
   };
-  await Sinbad.init({ siteId: "demo", endpoint: location.origin, fetch: proxyFetch });
+  // batchMs 0 keeps the demo button responsive; a site would keep the default.
+  await Sinbad.init({ siteId: "demo", endpoint: location.origin, fetch: proxyFetch, batchMs: 0 });
   button.disabled = false;
   status.textContent = "Ready";
   button.addEventListener("click", async () => {

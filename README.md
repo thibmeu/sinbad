@@ -11,7 +11,19 @@ await Sinbad.track("signup");
 await Sinbad.track("purchase", { value: 49 });
 ```
 
-`init` fetches `GET https://analytics.example/sites/my-site/manifest`. The service must provide provisioned DAP tasks for the site's named events and pages. `page()` uses `location.pathname` in a browser; pass a path in other runtimes. `track("purchase", { value: 49 })` sends an encrypted bounded Sum measurement. The value must be an integer in units chosen by the site, such as cents. Count events and pages send encrypted `1` measurements. Calls return Promises of dap-ts upload results, so callers can inspect `result.ok` or handle network errors. Unknown names and unsupported properties fail.
+`init` fetches `GET https://analytics.example/sites/my-site/manifest` and nothing else, however many tasks the manifest names. `page()` uses `location.pathname` in a browser; pass a path in other runtimes. `track("purchase", { value: 49 })` sends an encrypted bounded Sum measurement. The value must be an integer in units chosen by the site, such as cents. Count events and pages send encrypted `1` measurements. Calls return Promises of dap-ts upload results, so callers can inspect `result.ok` or handle network errors.
+
+An unknown event or page name, or properties an event does not take, logs a warning and does nothing. Analytics must not break the page it runs on. A measurement outside its task's bound is a programming error and still rejects.
+
+## Batching
+
+Reports for one task are collected for `batchMs` milliseconds (default 1000) and uploaded together, up to `maxBatch` reports (default 20) per request. Set `batchMs: 0` to send each call immediately. `Sinbad.flush()` uploads everything queued now.
+
+Whatever is still queued when the page goes away is sent with `navigator.sendBeacon` on `pagehide` and on `visibilitychange` to hidden, so a report fired during navigation is not lost. A beacon cannot read the response, so those calls resolve with an empty result.
+
+Each Aggregator's HPKE configuration is fetched once, on the first report that needs it, and shared by every task on that Aggregator. A manifest with twenty pages therefore costs two configuration requests, not forty, and one unreachable Aggregator affects only the tasks that use it. If the Leader answers with `hpke_unknown_config_id`, Sinbad discards the cached lists, retrieves them again, and retries the upload once with freshly prepared reports, as DAP 19 Section 4.4.2.2 requires.
+
+`createSiteAnalytics(config)` returns the same interface without the module-level singleton, plus `flush()` and `close()`. Call `close()` to remove the unload listeners.
 
 The manifest is JSON. Each entry contains a task configuration plus `vdaf: "count"` or `vdaf: "sum"`; Sum entries also contain `maxMeasurement`. For example:
 
