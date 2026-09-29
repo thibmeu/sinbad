@@ -1,7 +1,8 @@
-import { createHash, generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import {
+	checkMediaType,
 	Helper,
 	Leader,
 	prio3Count,
@@ -34,6 +35,7 @@ if (
 	verifyKey.length !== 32
 )
 	throw new Error("Invalid server configuration");
+const tokenHash = createHash("sha256").update(`Bearer ${token}`).digest();
 const vdaf =
 	process.env.VDAF === "sum"
 		? prio3Sum(1337)
@@ -52,7 +54,9 @@ const task = Task.create({
 	leader: "https://leader.example/",
 	helper: "https://helper.example/",
 	timePrecision: 60,
-	minBatchSize: 1,
+	// A real deployment must not publish an aggregate over a handful of
+	// reports. Raise MIN_BATCH_SIZE before exposing this to anyone.
+	minBatchSize: Number(process.env.MIN_BATCH_SIZE ?? 1),
 	batchMode: "time-interval",
 	vdaf,
 });
@@ -229,18 +233,51 @@ if (collectorKey) {
 }
 
 class HttpError extends Error {
-	constructor(status, message) {
+	constructor(status, message, type = "invalidMessage") {
 		super(message);
 		this.status = status;
+		this.type = type;
 	}
 }
+
+/** DAP 19, 3.6: report errors as RFC 9457 problem details. */
+function problem(response, error) {
+	const status = error?.status ?? 500;
+	// Only an error this server raised deliberately is safe to describe.
+	const known = error instanceof HttpError;
+	send(
+		response,
+		status,
+		JSON.stringify({
+			type: known
+				? `urn:ietf:params:ppm:dap:error:${error.type}`
+				: "about:blank",
+			title: known ? error.message : "Internal server error",
+			status,
+			taskid: task.id,
+		}),
+		"application/problem+json",
+	);
+}
 function authenticated(request) {
-	if (request.headers.authorization !== `Bearer ${token}`)
+	// Hash first so the comparison is over equal-length buffers.
+	const offered = createHash("sha256")
+		.update(String(request.headers.authorization ?? ""))
+		.digest();
+	if (!timingSafeEqual(offered, tokenHash))
 		throw new HttpError(401, "Unauthorized");
 }
 function media(request, name) {
-	if (request.headers["content-type"] !== `application/ppm-dap;message=${name}`)
+	// RFC 9110 allows whitespace and extra parameters, so parse rather than
+	// compare the header verbatim.
+	try {
+		checkMediaType(
+			{ "content-type": request.headers["content-type"] ?? "" },
+			name,
+		);
+	} catch {
 		throw new HttpError(415, "Wrong media type");
+	}
 }
 function send(
 	response,
@@ -520,7 +557,7 @@ function collectionInterval(body) {
 		query.duration !== 1n ||
 		start >= Math.floor(Date.now() / (task.timePrecision * 1000))
 	)
-		throw new HttpError(400, "Expected one closed time window");
+		throw new HttpError(400, "Expected one closed time window", "batchInvalid");
 	return start;
 }
 
@@ -549,7 +586,7 @@ async function helperAggregateShare(request, response) {
 		return;
 	}
 	if (sql.collectionForStart.get(start) && !saved)
-		throw new HttpError(409, "Window already has a collection");
+		throw new HttpError(409, "Window already has a collection", "batchOverlap");
 	const row = bucket(start);
 	if (
 		row.pending ||
@@ -559,7 +596,7 @@ async function helperAggregateShare(request, response) {
 		!same(row.checksum, query.checksum) ||
 		(row.collected && !saved)
 	)
-		throw new HttpError(409, "Aggregate batch does not match");
+		throw new HttpError(409, "Aggregate batch does not match", "batchMismatch");
 	const encrypted = encodeAggregateShare(
 		await aggregator.encryptShare(
 			query.collectionRequest,
@@ -574,7 +611,7 @@ async function helperAggregateShare(request, response) {
 			current.count !== row.count ||
 			!same(current.checksum, row.checksum)
 		)
-			throw new HttpError(409, "Aggregate batch changed");
+			throw new HttpError(409, "Aggregate batch changed", "batchMismatch");
 		if (!saved) sql.insertCollection.run(id, body, start);
 		sql.collect.run(start);
 		sql.finishCollection.run(encrypted, id);
@@ -606,7 +643,7 @@ async function collectionJob(request, response, id) {
 					sql.collectionForStart.get(start) ||
 					sql.bucket.get(start)?.collected
 				)
-					throw new HttpError(409, "Window already collected");
+					throw new HttpError(409, "Window already collected", "batchOverlap");
 				sql.insertCollection.run(id, body, start);
 			});
 			saved = sql.collectionJob.get(id);
@@ -628,7 +665,7 @@ async function collectionJob(request, response, id) {
 					current.count !== row.count ||
 					!same(current.checksum, row.checksum)
 				)
-					throw new HttpError(409, "Collection batch changed");
+					throw new HttpError(409, "Collection batch changed", "batchMismatch");
 				sql.collect.run(saved.start);
 			});
 			const peer = await fetch(
@@ -745,7 +782,8 @@ const server = createServer(async (request, response) => {
 			if (!/^[0-9a-f]{64}$/.test(jobId))
 				throw new HttpError(400, "Invalid job ID");
 			const job = sql.job.get(jobId);
-			if (!job) throw new HttpError(404, "Job not found");
+			if (!job)
+				throw new HttpError(404, "Job not found", "unrecognizedAggregationJob");
 			send(
 				response,
 				200,
@@ -770,11 +808,10 @@ const server = createServer(async (request, response) => {
 			url.pathname.startsWith(`/tasks/${task.id}/collection_jobs/`)
 		)
 			await collectionJob(request, response, url.pathname.split("/").at(-1));
-		else throw new HttpError(404, "Not found");
+		else throw new HttpError(404, "Not found", "unrecognizedTask");
 	} catch (error) {
 		console.error(error);
-		if (!response.headersSent)
-			send(response, error.status ?? 500, error.message, "text/plain");
+		if (!response.headersSent) problem(response, error);
 		else response.end();
 	}
 });

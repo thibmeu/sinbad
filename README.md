@@ -105,6 +105,10 @@ cd ../sinbad && npm ci
 docker compose -f compose.count.yaml up -d
 ```
 
+Errors from these roles are RFC 9457 problem documents carrying the DAP error
+tokens from Section 3.6, so a client can tell `batchMismatch` from
+`unrecognizedTask` without guessing from the status code.
+
 The leader listens on `127.0.0.1:9011` and the helper on `127.0.0.1:9012`.
 Named Docker volumes keep their SQLite files across restarts. The task uses
 the DAP 19 configuration returned by `GET /task`; each role serves its HPKE
@@ -137,6 +141,35 @@ memory. Set `BENCH_MINUTES_AGO` to use a different minute for another run.
 For Sum, start Compose with `VDAF=sum` and pass `sum` as the benchmark's last
 argument. For Histogram, use `VDAF=histogram HISTOGRAM_LENGTH=100 HISTOGRAM_CHUNK_LENGTH=10`
 and pass `histogram`. Keep each run in a fresh, uncollected time bucket.
+
+## Security and privacy
+
+The dap-ts cryptography has not been audited, and this package is a prototype.
+
+DAP hides what a measurement says. It does not hide that a client reported.
+The Leader sees each upload's source IP address, its arrival time, and its task
+ID, and DAP 19 Section 8 lists that metadata as a way for an Aggregator or a
+network observer to identify participating clients.
+
+Sinbad selects a task per event name and per page path, so the task ID
+distinguishes which page a visitor loaded. Together with the source IP that
+gives the Leader a clickstream, which is the thing DAP is meant to prevent.
+Batching reduces how many requests carry that signal, but does not remove it.
+
+Before running this against real visitors:
+
+- Put an anonymizing proxy in front of the Leader and forward reports over
+  Oblivious HTTP, as described in DAP 19 Section 8.4. The proxy, not an
+  Aggregator, then sees the client address.
+- Keep the page categories few and fixed. One task per arbitrary URL both
+  breaks batch sizes and sharpens this signal.
+- Set a minimum batch size that actually protects a single visitor. The
+  example aggregators default to 1, which publishes individual measurements;
+  set `MIN_BATCH_SIZE` before exposing them.
+- Run the Leader and Helper as genuinely independent operators. DAP gives no
+  privacy if they collude.
+
+DAP does not provide differential privacy.
 
 ## License
 
