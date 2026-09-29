@@ -349,6 +349,20 @@ try {
 			headers: auth,
 		});
 	assert.equal((await trigger()).status, 204);
+	// A pending job does not block a wider one, and a collector can drop it.
+	const wider = await collect(
+		collector,
+		{ start: empty, end: empty + 180_000 },
+		{ ...options, maxPolls: 0 },
+	);
+	assert.equal(wider.status, "pending");
+	if (wider.status === "pending") {
+		const dropped = await fetch(
+			new URL(new URL(wider.state.location).pathname.slice(1), leaderUrl),
+			{ method: "DELETE", headers: auth },
+		);
+		assert.equal(dropped.status, 204);
+	}
 	const analyticsDb = new DatabaseSync(join(directory, "analytics.sqlite"));
 	assert.ok(
 		analyticsDb

@@ -390,6 +390,21 @@ export async function createAggregator(
 			// DAP 19, 4.6.1: wait for more reports rather than fail.
 			if (leader!.bucketReportCount(merged) < task.minBatchSize)
 				return undefined;
+			// Another job may have collected part of this interval meanwhile.
+			if (
+				one(
+					"SELECT 1 FROM collections WHERE collected=1 AND start<? AND end>? LIMIT 1",
+					end,
+					start,
+				)
+			) {
+				q(
+					"UPDATE collections SET error=? WHERE id=?",
+					"urn:ietf:params:ppm:dap:error:batchOverlap",
+					id,
+				);
+				return undefined;
+			}
 			q("UPDATE collections SET collected=1 WHERE id=?", id);
 			return { merged, body: job.aggregateShareRequest(merged) };
 		});
@@ -439,16 +454,18 @@ export async function createAggregator(
 			transaction(() => {
 				if (one("SELECT 1 FROM collections WHERE id=?", jobId)) return;
 				if (
+					// DAP 19, 4.6.1: only collected buckets conflict. Pending jobs
+					// may overlap, so a collector can widen an interval that is
+					// still short of the minimum batch.
 					one(
-						"SELECT 1 FROM collections WHERE id!=? AND start<? AND end>? LIMIT 1",
-						jobId,
+						"SELECT 1 FROM collections WHERE collected=1 AND start<? AND end>? LIMIT 1",
 						job.interval.end,
 						job.interval.start,
 					)
 				)
 					throw new DAPError(
 						"InvalidMessage",
-						"Interval overlaps another collection",
+						"Interval overlaps a collected batch",
 						{ type: "batchOverlap" },
 					);
 				q(
@@ -622,6 +639,20 @@ export async function createAggregator(
 				request,
 				pathname.slice(`${base}collection_jobs/`.length),
 			);
+		if (
+			leader &&
+			method === "DELETE" &&
+			pathname.startsWith(`${base}collection_jobs/`)
+		) {
+			// DAP 19, 4.6.3: a collector abandons a job. A collected batch
+			// stays collected; a pending job is forgotten.
+			await authenticate(request, options.token);
+			q(
+				"DELETE FROM collections WHERE id=? AND collected=0",
+				pathname.slice(`${base}collection_jobs/`.length),
+			);
+			return new Response(null, { status: 204 });
+		}
 		if (leader && method === "GET" && pathname === "/internal/ready") {
 			// Closed windows a collector can take now, for an analytics backend.
 			await authenticate(request, options.token);
