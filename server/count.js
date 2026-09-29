@@ -303,7 +303,8 @@ async function helperJob(request, response) {
 			}
 			responses.push(value);
 		}
-		const value = Buffer.concat(responses);
+		// seal() checks that the list still lines up with the job.
+		const value = Buffer.from(result.seal(responses));
 		sql.helperJob.run(
 			jobId,
 			body,

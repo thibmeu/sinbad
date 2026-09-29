@@ -15,7 +15,7 @@ import {
 } from "./fetch.js";
 
 async function reporter<M>(task: Task<M>, options: FetchOptions) {
-	const client = new Client(task, {
+	const client = await Client.create(task, {
 		hpke: await fetchHpkeConfigs(task, options),
 	});
 	return async (measurement: M): Promise<UploadResult> =>

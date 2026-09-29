@@ -152,7 +152,7 @@ try {
 		id: taskWire.id,
 		configuration: Uint8Array.fromHex(taskWire.configuration),
 	}).expect(vdaf);
-	const client = new Client(task, {
+	const client = await Client.create(task, {
 		hpke: {
 			leader: await config(leaderPort),
 			helper: await config(helperPort),

@@ -161,7 +161,7 @@ function finishedJanus(role = 0) {
 	);
 }
 const task = await setup();
-const client = new Client(task, {
+const client = await Client.create(task, {
 	hpke: { leader: await config(0), helper: await config(1) },
 });
 // Keep report preparation outside the timed window.
