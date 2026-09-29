@@ -18,7 +18,6 @@ services:
       COLLECTOR_PUBLIC_KEY_HEX: ${COLLECTOR_PUBLIC_KEY_HEX:-}
     volumes:
       - .:/work/sinbad:ro
-      - ../dap-ts:/work/dap-ts:ro
       - count-leader-data:/data
     ports:
       - "127.0.0.1:9011:8080"
@@ -42,7 +41,6 @@ services:
       COLLECTOR_PUBLIC_KEY_HEX: ${COLLECTOR_PUBLIC_KEY_HEX:-}
     volumes:
       - .:/work/sinbad:ro
-      - ../dap-ts:/work/dap-ts:ro
       - count-helper-data:/data
     ports:
       - "127.0.0.1:9012:8080"

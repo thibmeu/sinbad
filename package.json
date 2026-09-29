@@ -39,7 +39,8 @@
     "demo": "npm run build:demo && node demo/server.ts",
     "test": "vitest run",
     "test:aggregate-server": "node test/aggregate-server.ts count && node test/aggregate-server.ts sum && node test/aggregate-server.ts histogram",
-    "bench:count": "node bench/count.ts"
+    "bench:count": "node bench/count.ts",
+    "vendor": "(cd ../dap-ts && npm pack --pack-destination ../sinbad/vendor) && npm install ./vendor/dap-ts-0.0.0.tgz --save-dev"
   },
   "peerDependencies": {
     "dap-ts": "*"
@@ -47,7 +48,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.5.13",
     "@types/node": "26.6.3",
-    "dap-ts": "file:../dap-ts",
+    "dap-ts": "file:vendor/dap-ts-0.0.0.tgz",
     "esbuild": "0.28.2",
     "typescript": "7.0.2",
     "vitest": "5.0.1"

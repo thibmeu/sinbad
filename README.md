@@ -82,8 +82,7 @@ The Leader checks each upload, stores the reports, and answers at once. A backgr
 A collection may span any number of buckets. The Leader keeps a collection job pending until its interval has closed, every report in it is aggregated, and the batch reaches the minimum size, then collects it and refuses later reports for it with `batch-collected`. An interval that overlaps an earlier collection fails with `batchOverlap`. Errors are RFC 9457 problem documents carrying DAP's error types, built with dap-ts's `problemResponse`.
 
 ```sh
-cd ../dap-ts && npm ci && npm run build
-cd ../sinbad && npm ci
+npm ci
 docker compose -f compose.count.yaml up -d
 ```
 
@@ -105,7 +104,9 @@ Open <http://localhost:8080>. The demo server builds the manifest from the Leade
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs the unit tests, typecheck, lint, build, demo bundle, and the loopback aggregator tests. It builds against a checkout of the sibling dap-ts repository. Because both repositories are private, the default `GITHUB_TOKEN` cannot read dap-ts, so the workflow needs a repository secret `DAP_TS_TOKEN` with read access to it. Without that secret the workflow skips instead of failing on every push.
+`.github/workflows/ci.yml` runs the unit tests, typecheck, lint, build, demo bundle, and the loopback aggregator tests.
+
+dap-ts is private, so its pack lives in `vendor/` and `npm ci` needs nothing else. After changing dap-ts, build it in its sibling directory and run `npm run vendor`.
 
 ## Security and privacy
 

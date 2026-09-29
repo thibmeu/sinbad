@@ -8,41 +8,14 @@ permissions:
   contents: read
 
 jobs:
-  # Sinbad builds against the sibling dap-ts repository, which is private, so
-  # the default GITHUB_TOKEN cannot read it. Set DAP_TS_TOKEN to a token with
-  # read access to thibmeu/dap-ts; without it this workflow skips rather than
-  # failing on every push.
-  credentials:
-    runs-on: ubuntu-24.04
-    outputs:
-      sibling: ${{ steps.probe.outputs.sibling }}
-    steps:
-      - id: probe
-        run: echo "sibling=${{ secrets.DAP_TS_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
-
   verify:
-    needs: credentials
-    if: needs.credentials.outputs.sibling == 'true'
     runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: sinbad
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          path: sinbad
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: thibmeu/dap-ts
-          token: ${{ secrets.DAP_TS_TOKEN }}
-          path: dap-ts
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 26.2.0
           cache: npm
-          cache-dependency-path: sinbad/package-lock.json
-      - run: npm ci && npm run build
-        working-directory: dap-ts
       - run: npm ci
       - run: npm test
       - run: npm run typecheck
