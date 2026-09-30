@@ -106,8 +106,6 @@ Open <http://localhost:8080>. The demo server builds the manifest from the Leade
 
 `.github/workflows/ci.yml` runs the unit tests, typecheck, lint, build, demo bundle, and the loopback aggregator tests.
 
-@thibmeu/dap is not on npm yet, so its pack lives in `vendor/` and `npm ci` needs nothing else. After changing it, run `npm run vendor`, which packs the sibling `dap-ts` checkout.
-
 ## Security and privacy
 
 The @thibmeu/dap cryptography has not been audited, and this package is a prototype.
