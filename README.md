@@ -1,26 +1,63 @@
 # ⛵ Sinbad
 
-A small analytics library and Fetch transport for [@thibmeu/dap](https://github.com/thibmeu/dap-ts).
+[![NPM](https://img.shields.io/npm/v/sinbad?style=flat-square)](https://www.npmjs.com/package/sinbad)
+[![License](https://img.shields.io/npm/l/sinbad?style=flat-square)](LICENSE)
 
-```js
+Web analytics over the Distributed Aggregation Protocol, built on
+[@thibmeu/dap](https://github.com/thibmeu/dap-ts). Pages report encrypted
+counts and values to two aggregators, and the site owner collects only
+aggregates.
+
+## Features
+
+- **Browser analytics**: page views, events, and bounded values, each reported to its own DAP task
+- **One request to start**: a site manifest names every task; each aggregator's HPKE configuration is fetched once
+- **Batched delivery**: reports are grouped per task and still sent when the page closes
+- **Fetch transport**: upload, HPKE retrieval, and collection polling for @thibmeu/dap
+- **Aggregators**: a Leader and Helper over synchronous SQLite, with example servers
+
+## Installation
+
+```bash
+npm install sinbad @thibmeu/dap
+```
+
+## Quick start
+
+```typescript
 import { Sinbad } from "sinbad";
 
 Sinbad.init({ siteId: "my-site", endpoint: "https://analytics.example/" });
 Sinbad.page();
 Sinbad.track("signup");
 Sinbad.track("purchase", { value: 49 });
-Sinbad.track("plan", { value: 2 });
 ```
 
-`init` fetches `GET https://analytics.example/sites/my-site/manifest` and nothing else, however many tasks the manifest names. Calls made before `init` resolves wait for it, so a page can track as soon as it loads.
+`init` fetches `https://analytics.example/sites/my-site/manifest` and nothing
+else. Calls made before it resolves wait for it, so a page can track as soon
+as it loads.
 
-`page()` counts a view of `location.pathname` in a browser; pass a path in other runtimes. `track(name)` counts an event. `track(name, { value })` adds an integer to a bounded Sum task, in units chosen by the site such as cents, or reports a bucket index to a Histogram task. Every report is encrypted to the two aggregators.
+`page()` counts a view of `location.pathname`; pass a path in other runtimes.
+`track(name)` counts an event. `track(name, { value })` adds an integer to a
+Sum task, in units the site chooses such as cents, or reports a bucket index
+to a Histogram task.
 
-Calls return Promises of a result with `accepted`, `rejected`, `ok`, and `sent`. An unknown event or page name, or properties an event does not take, logs a warning and resolves with `sent: false`: analytics must not break the page it runs on. Calls also resolve that way if `init` fails. A value outside its task's bound is a programming error and rejects. Network failures reject too; Sinbad does not retry them.
+Each call resolves with `accepted`, `rejected`, `ok`, and `sent`. An unknown
+event or page, or properties an event does not take, logs a warning and
+resolves with `sent: false`, as do calls after a failed `init`: analytics must
+not break the page. A value outside its task's bound rejects, and so do
+network failures. Sinbad does not retry them.
+
+`createSiteAnalytics(config)` returns the same interface without the
+module-level singleton, plus `flush()` and `close()`, which removes the unload
+listeners.
 
 ## Manifest
 
-The manifest maps event names and page paths to provisioned tasks. Each entry is the task ID and its encoded DAP TaskConfiguration, both in URL-safe Base 64 without padding, as @thibmeu/dap's `task.id` and `task.encodeConfiguration()` produce them. The configuration fixes the VDAF, so Sinbad needs nothing else:
+The manifest maps event names and page paths to provisioned tasks. Each entry
+holds the task ID and its encoded DAP task configuration, both URL-safe Base64
+without padding, as `task.id` and `task.encodeConfiguration()` produce them.
+The configuration fixes the VDAF, so Sinbad needs nothing else.
 
 ```json
 {
@@ -34,27 +71,40 @@ The manifest maps event names and page paths to provisioned tasks. Each entry is
 }
 ```
 
-Use a separate task per entry. Pages must use Count tasks. Event names and paths select tasks locally; aggregators receive task IDs and encrypted reports. Other event properties and user identities are not supported.
+Use one task per entry; pages must use Count tasks. Names and paths select a
+task locally; aggregators only see task IDs and encrypted reports.
 
-## Batching
+## Delivery
 
-Reports for one task are collected for `batchMs` milliseconds (default 1000) and uploaded together, up to `maxBatch` reports (default 20) per request. Set `batchMs: 0` to send each call immediately. `Sinbad.flush()` uploads everything queued now.
+Sinbad encrypts each report when `track()` or `page()` is called, then
+uploads a task's reports together every `batchMs` milliseconds (default 1000),
+up to `maxBatch` per request (default 20). `batchMs: 0` sends each call at
+once and `Sinbad.flush()` sends everything queued.
 
-Whatever is still queued when the page goes away is sent on `pagehide`, or when `visibilitychange` reports the page hidden, with `fetch(..., { keepalive: true })`. In headless Chrome, only such a request reached a cross-origin Leader during navigation: `navigator.sendBeacon` sends credentials, so its preflight needs `Access-Control-Allow-Credentials`, and a plain fetch can be cancelled. Browsers cap keepalive bodies at 64 KiB in total, which is about 280 Count reports or 24 Histogram reports of 100 buckets.
+On `pagehide`, or when the page becomes hidden, queued reports go out with
+`fetch(..., { keepalive: true })`. A report still waiting for keys or
+encryption at that point may be lost. Browsers cap keepalive bodies at 64 KiB
+in total, about 280 Count reports or 24 Histogram reports of 100 buckets.
+`navigator.sendBeacon` is not used: it sends credentials, which a
+cross-origin Leader would have to allow.
 
-Each Aggregator's HPKE configuration is fetched once, on the first report that needs it, and shared by every task on that Aggregator. A manifest with twenty pages therefore costs two configuration requests, not forty, and one unreachable Aggregator affects only the tasks that use it. If the Leader answers `hpke-unknown-config-id`, Sinbad discards the cached lists, retrieves them again, and retries only the reports rejected that way, once, as DAP 19 Section 4.4.2.2 requires.
+Each aggregator's HPKE configuration is fetched once, on the first report that
+needs it, and shared by every task on that aggregator. If the Leader answers
+`hpke-unknown-config-id`, Sinbad refetches the configurations, bypassing the
+HTTP cache, and retries the rejected reports once, as
+[draft-ietf-ppm-dap-19, Section 4.4.2.2](https://www.ietf.org/archive/id/draft-ietf-ppm-dap-19.html#section-4.4.2.2)
+recommends.
 
-`createSiteAnalytics(config)` returns the same interface without the module-level singleton, plus `flush()` and `close()`. Call `close()` to remove the unload listeners.
+A custom `fetch` receives a Web `Request`. To send it elsewhere, copy the body
+with `await request.arrayBuffer()`, since browsers refuse a streamed body over
+HTTP/1.1. That copy can delay dispatch during `pagehide`.
 
-A custom `fetch` receives a Web `Request`. To send it elsewhere, copy the body with `await request.arrayBuffer()`: passing the Request as the init of a new one turns the body into a stream, which browsers refuse over HTTP/1.1.
+## Collection
 
-## Fetch transport
+`sinbad/collector` polls a collection job for a @thibmeu/dap `Collector`. Keep
+the collector's private key and credentials on a backend.
 
-`sinbad/fetch` exports `send(request, options)`, `execute(preparedUpload, options)`, `fetchHpkeConfig(base, options)`, `fetchHpkeConfigs(task, options)`, and `readLimited(response, limit)`. Options take a custom `fetch`, extra `headers`, an abort `signal`, and `keepalive`. `execute()` sends an existing upload once; callers decide whether to retry it.
-
-`sinbad/collector` exports `collect(collector, queryOrState, options)` and `executeCollection(preparedCollection, options)`. Collection credentials and the collector private key belong on a backend:
-
-```js
+```typescript
 import { Collector } from "@thibmeu/dap";
 import { collect } from "sinbad/collector";
 
@@ -69,60 +119,96 @@ if (progress.status === "pending") saveForLater(progress.state);
 else console.log(progress.value, progress.reportCount);
 ```
 
-`collect` polls up to `maxPolls` times (default 20), honouring `Retry-After` between `minDelayMs` and `maxDelayMs`, then returns the pending state to resume later.
+`collect` polls up to `maxPolls` times (default 20), honouring `Retry-After`
+between `minDelayMs` and `maxDelayMs`, then returns the pending state to
+resume later.
 
-The package builds ESM JavaScript and TypeScript declarations from strict TypeScript source. Everything else in the repository is TypeScript too and runs directly on Node 26, which strips types without a build step.
+`sinbad/fetch` has the lower-level pieces: `send`, `execute` for a prepared
+upload, `fetchHpkeConfig`, `fetchHpkeConfigs`, and `readLimited`. They take a
+custom `fetch`, extra `headers`, an abort `signal`, and `keepalive`.
+In `createSiteAnalytics`, `headers` are sent only with the manifest request,
+never to aggregators.
 
-## Example aggregators
+## Aggregators
 
-`server/aggregator.ts` runs a DAP 19 Leader or Helper for one task, with its own SQLite file and HPKE key. It is an example, not a hardened service.
+`sinbad/aggregator` runs a DAP Leader or Helper for one task over synchronous
+SQLite, such as `node:sqlite`. The Leader's `helper.url` must be HTTPS, or
+HTTP on loopback for local development.
 
-The Leader checks each upload, stores the reports, and answers at once. A background loop builds aggregation jobs from stored reports, saves each job before sending it to the Helper, and commits each share once when the Helper answers. A Helper outage or a Leader restart only delays aggregation: saved jobs are sent again with the same bytes, and the Helper returns its stored response. The Leader serves `/hpke_config` with a one-day cache lifetime and answers CORS preflights on it and on the upload resource, so browsers on other origins can report.
+```typescript
+import { createAggregator } from "sinbad/aggregator";
 
-A collection may span any number of buckets. The Leader keeps a collection job pending until its interval has closed, every report in it is aggregated, and the batch reaches the minimum size, then collects it and refuses later reports for it with `batch-collected`. An interval that overlaps an earlier collection fails with `batchOverlap`. Errors are RFC 9457 problem documents carrying DAP's error types, built with @thibmeu/dap's `problemResponse`.
+const leader = await createAggregator({
+  role: "leader",
+  task,
+  storage, // { query(sql, ...params), transaction(fn) }
+  token: collectorToken,
+  helper: { url: "https://helper.example/", token: leaderToken },
+  hpkeKeys: [{ configId: 7, privateKey }],
+  verifyKeys: [{ id: 0, key: verifyKey }],
+  collector: collectorHpkeConfig,
+});
+
+// Serve DAP requests with leader.fetch(request), and aggregate one pass at a
+// time. A failed pass is safe to run again.
+for (;;) {
+  await leader.aggregate().catch(console.error);
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+}
+```
+
+The Leader stores uploads and answers at once. `aggregate()` sends saved jobs
+and builds new ones from stored reports. A job is saved before it is sent and
+each share is committed once, so a Helper outage or a Leader restart only
+delays aggregation. Pass `schedule` to be told when an upload brings new work.
+The Leader serves `/hpke_config` and accepts cross-origin uploads.
+
+A collection may span many buckets. The Leader completes it once the interval
+has closed, all its reports are aggregated, and the batch reaches the minimum
+size; later reports for it get `batch-collected`, and overlapping collections
+get `batchOverlap`. Errors are RFC 9457 problem documents.
+
+## Example servers
+
+`server/aggregator.ts` runs one role on `node:sqlite`, and
+`server/analytics.ts` is a collector backend that collects fixed windows and
+serves the totals. Both are examples, not hardened services.
 
 ```sh
 npm ci
-docker compose -f compose.count.yaml up -d
+docker compose -f compose.count.yaml up -d  # Leader on :9011, Helper on :9012
+npm run demo                                 # http://localhost:8080
 ```
 
-The Leader listens on `127.0.0.1:9011` and the Helper on `127.0.0.1:9012`. Named Docker volumes keep their SQLite files across restarts. `GET /task` returns the task in manifest form. The task names fixed placeholder HTTPS hosts, so callers route requests to the loopback ports. The Compose token and verification key are fixed test values. Set `COLLECTOR_PUBLIC_KEY_HEX` to a raw X25519 public key before starting Compose to enable collection; the private key stays with the analytics backend. `VDAF` selects `count`, `sum`, or `histogram` (with `HISTOGRAM_LENGTH` and `HISTOGRAM_CHUNK_LENGTH`), and `MIN_BATCH_SIZE` defaults to 1, which publishes individual measurements.
+Set `VDAF` to `count`, `sum`, or `histogram`, and `COLLECTOR_PUBLIC_KEY_HEX`
+to enable collection. `MIN_BATCH_SIZE` defaults to 1, which publishes
+individual measurements. The Compose token and verification key are fixed
+test values.
 
-`server/analytics.ts` is the collector backend for one metric. It needs `LEADER_URL`, `COLLECTOR_PRIVATE_KEY_HEX`, and `AUTH_TOKEN`, which must match the Leader's. It collects fixed windows of `WINDOW_MS` milliseconds (default one hour, a multiple of the task's time precision) as soon as the Leader reports them ready, and resumes pending ones after a restart. Choose a window that gathers at least the minimum batch: DAP collects each bucket once, so smaller windows cannot be merged later. An authenticated `POST /internal/collect?start=...` collects one window. `GET /api/analytics?metric=page_views&category=%2Fpricing&from=...&to=...` returns the completed windows and their `total`, with Unix-millisecond bounds and decimal-string values.
+`npm run test:aggregate-server` exercises crashes, retries, and collection for
+each VDAF on loopback ports. `npm run bench:count` measures upload and
+aggregation throughput against Compose.
 
-`npm run test:aggregate-server` exercises Count, Sum, and Histogram on loopback ports: a Leader crash while its job is at the Helper, identical and conflicting retries, a two-bucket collection, overlap and mismatch errors, and the analytics backend across restarts. With Compose running, `npm run bench:count -- sinbad 500 10 50` uploads 500 prepared Count reports in 10 uploads of 50 at concurrency 10, waits until the Leader has aggregated all of them, and reports upload latency, verified throughput, container CPU time, and peak memory. Start Compose with `VDAF=sum` or `VDAF=histogram HISTOGRAM_LENGTH=100 HISTOGRAM_CHUNK_LENGTH=10` and pass `sum` or `histogram` as the last argument for the other VDAFs. `npm run bench:count -- janus 500 10 50` runs the same workload against the pinned Janus DAP 18 image started by `scripts/up.sh`.
+## Security considerations
 
-## Local demo
+**Not audited.** @thibmeu/dap has not been audited either.
 
-The demo is a page with one button that counts clicks through the example aggregators. With Compose running:
+DAP hides what a client reported, not that it reported. The Leader sees each
+upload's source IP, arrival time, and task ID
+([draft-ietf-ppm-dap-19, Section 8](https://www.ietf.org/archive/id/draft-ietf-ppm-dap-19.html#section-8)).
+Sinbad uses a task per page path, so the task ID says which page a visitor
+loaded, and with the source IP that is a clickstream. Batching reduces the
+number of requests but does not remove the signal.
 
-```sh
-npm run demo
-```
+Before tracking real visitors:
 
-Open <http://localhost:8080>. The demo server builds the manifest from the Leader's task and forwards the page's DAP requests to the two roles. Set `LEADER_URL`, `HELPER_URL`, `HOST`, and `PORT` for other addresses. It binds to `127.0.0.1` by default and is for local development.
-
-## Continuous integration
-
-`.github/workflows/ci.yml` runs the unit tests, typecheck, lint, build, demo bundle, and the loopback aggregator tests.
-
-## Security and privacy
-
-The @thibmeu/dap cryptography has not been audited, and this package is a prototype.
-
-DAP hides what a measurement says. It does not hide that a client reported. The Leader sees each upload's source IP address, its arrival time, and its task ID, and DAP 19 Section 8 lists that metadata as a way for an Aggregator or a network observer to identify participating clients.
-
-Sinbad selects a task per event name and per page path, so the task ID distinguishes which page a visitor loaded. Together with the source IP that gives the Leader a clickstream, which is the thing DAP is meant to prevent. Batching reduces how many requests carry that signal, but does not remove it.
-
-Before running this against real visitors:
-
-- Put an anonymizing proxy in front of the Leader and forward reports over Oblivious HTTP, as described in DAP 19 Section 8.4. The proxy, not an Aggregator, then sees the client address.
-- Keep the page categories few and fixed. One task per arbitrary URL both breaks batch sizes and sharpens this signal.
-- Set a minimum batch size that actually protects a single visitor, and a time precision and collection window coarse enough to reach it.
-- Run the Leader and Helper as genuinely independent operators. DAP gives no privacy if they collude.
+- Send reports through an Oblivious HTTP relay ([Section 8.4](https://www.ietf.org/archive/id/draft-ietf-ppm-dap-19.html#section-8.4)), so the relay sees the client address instead of the Leader.
+- Keep page categories few and fixed. A task per arbitrary URL both shrinks batches and sharpens the signal.
+- Set a minimum batch size that protects a single visitor, with a time precision and collection window coarse enough to reach it.
+- Run the Leader and Helper as independent operators. DAP gives no privacy if they collude.
 
 DAP does not provide differential privacy.
 
 ## License
 
-[MIT](LICENSE). Janus is a separate MPL-2.0 project and is built from its pinned source by `scripts/up.sh` for benchmarks.
+[MIT](LICENSE). Janus, used for benchmarks, is a separate MPL-2.0 project built from pinned source by `scripts/up.sh`.

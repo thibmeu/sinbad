@@ -1,10 +1,26 @@
 {
   "name": "sinbad",
-  "version": "0.0.0",
-  "private": true,
-  "description": "Simple analytics over @thibmeu/dap",
-  "type": "module",
+  "version": "0.1.0",
+  "description": "Privacy-preserving web analytics over the Distributed Aggregation Protocol",
+  "keywords": [
+    "analytics",
+    "privacy",
+    "dap",
+    "ppm",
+    "prio",
+    "vdaf"
+  ],
+  "author": "Thibault Meunier",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thibmeu/sinbad.git"
+  },
+  "bugs": {
+    "url": "https://github.com/thibmeu/sinbad/issues"
+  },
+  "homepage": "https://github.com/thibmeu/sinbad#readme",
+  "type": "module",
   "sideEffects": false,
   "exports": {
     ".": {
