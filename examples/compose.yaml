@@ -1,26 +1,26 @@
 services:
   leader:
     image: node:26-alpine
+    # Share the Helper's network namespace so local HTTP stays on loopback.
+    network_mode: service:helper
     working_dir: /work/sinbad
     command: ["node", "examples/aggregator.ts"]
     environment:
       ROLE: leader
       HOST: 0.0.0.0
-      PORT: 8080
+      PORT: 8081
       DATA_FILE: /data/${VDAF:-count}.sqlite
       VDAF: ${VDAF:-count}
       MIN_BATCH_SIZE: ${MIN_BATCH_SIZE:-1}
       HISTOGRAM_LENGTH: ${HISTOGRAM_LENGTH:-4}
       HISTOGRAM_CHUNK_LENGTH: ${HISTOGRAM_CHUNK_LENGTH:-2}
-      HELPER_URL: http://helper:8080/
+      HELPER_URL: http://127.0.0.1:8080/
       AUTH_TOKEN: local-count-token
       VERIFY_KEY_HEX: "0000000000000000000000000000000000000000000000000000000000000000"
       COLLECTOR_PUBLIC_KEY_HEX: ${COLLECTOR_PUBLIC_KEY_HEX:-}
     volumes:
       - ..:/work/sinbad:ro
       - count-leader-data:/data
-    ports:
-      - "127.0.0.1:9011:8080"
     depends_on:
       - helper
   helper:
@@ -43,6 +43,7 @@ services:
       - ..:/work/sinbad:ro
       - count-helper-data:/data
     ports:
+      - "127.0.0.1:9011:8081"
       - "127.0.0.1:9012:8080"
 volumes:
   count-leader-data:

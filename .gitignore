@@ -1,3 +1,20 @@
 node_modules/
 dist/
 examples/site/app.bundle.js
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+!.env.*.example
+.aws/
+*.pem
+*.key
+
+# Local SQLite databases and their sidecar files
+*.sqlite
+*.sqlite3
+*.db
+*.sqlite-*
+*.sqlite3-*
+*.db-*
