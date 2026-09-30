@@ -312,3 +312,65 @@ it("rejects manifests that do not decode into tasks", async () => {
 			}),
 		).rejects.toThrow();
 });
+
+it("rejects invalid batching options before fetching", async () => {
+	const fetch = vi.fn();
+	for (const maxBatch of [0, -1, 0.5, NaN, Infinity]) {
+		await expect(
+			createSiteAnalytics({
+				siteId: "test",
+				endpoint: "https://analytics.example/",
+				fetch,
+				maxBatch,
+			}),
+		).rejects.toThrow("Invalid maxBatch");
+	}
+	for (const batchMs of [-1, 0.5, NaN, Infinity, 2147483648]) {
+		await expect(
+			createSiteAnalytics({
+				siteId: "test",
+				endpoint: "https://analytics.example/",
+				fetch,
+				batchMs,
+			}),
+		).rejects.toThrow("Invalid batchMs");
+	}
+	expect(fetch).not.toHaveBeenCalled();
+});
+
+it("keeps manifest credentials out of HPKE retrieval and uploads", async () => {
+	const { fetch, requests } = site({
+		events: { test: entry(11, prio3Count()) },
+	});
+	const analytics = await createSiteAnalytics({
+		siteId: "test",
+		endpoint: "https://analytics.example/",
+		fetch,
+		headers: {
+			authorization: "Bearer manifest-secret",
+			"x-api-key": "manifest-key",
+		},
+		batchMs: 0,
+	});
+	try {
+		expect(await analytics.track("test")).toMatchObject({
+			sent: true,
+			ok: true,
+		});
+		expect(requests[0]!.headers.get("authorization")).toBe(
+			"Bearer manifest-secret",
+		);
+		expect(requests[0]!.headers.get("x-api-key")).toBe("manifest-key");
+		expect(requests.slice(1).map((r) => new URL(r.url).origin)).toEqual([
+			"https://leader.example",
+			"https://helper.example",
+			"https://leader.example",
+		]);
+		for (const request of requests.slice(1)) {
+			expect(request.headers.has("authorization")).toBe(false);
+			expect(request.headers.has("x-api-key")).toBe(false);
+		}
+	} finally {
+		analytics.close();
+	}
+});

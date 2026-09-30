@@ -150,6 +150,22 @@ export async function createAggregator(
 	options: SinbadAggregatorOptions,
 ): Promise<SinbadAggregator> {
 	const { role, task, storage } = options;
+	const target = options.helper;
+	const helperUrl = target ? new URL(target.url) : undefined;
+	if (helperUrl) {
+		const loopback =
+			helperUrl.protocol === "http:" &&
+			["localhost", "127.0.0.1", "[::1]"].includes(helperUrl.hostname);
+		if (
+			(helperUrl.protocol !== "https:" && !loopback) ||
+			helperUrl.username ||
+			helperUrl.password ||
+			helperUrl.search ||
+			helperUrl.hash
+		)
+			throw new TypeError("Invalid Helper URL");
+	}
+
 	const leader =
 		role === "leader" ? await Leader.create(task, options) : undefined;
 	const helper =
@@ -259,12 +275,14 @@ export async function createAggregator(
 		message: string,
 		body: Uint8Array<ArrayBuffer>,
 	): Promise<Response> {
-		const target = options.helper;
-		if (!target) throw new Error("The Leader needs a Helper URL and token");
+		if (!target || !helperUrl)
+			throw new Error("The Leader needs a Helper URL and token");
 		const request = new Request(
-			new URL(`tasks/${task.id}/${path}`, target.url),
+			new URL(`tasks/${task.id}/${path}`, helperUrl),
 			{
 				method: "POST",
+				redirect: "manual",
+				credentials: "omit",
 				headers: {
 					authorization: `Bearer ${target.token}`,
 					"content-type": `application/ppm-dap;message=${message}`,

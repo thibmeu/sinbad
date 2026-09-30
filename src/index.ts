@@ -199,6 +199,8 @@ function manifestEntries(value: unknown): [string, Task][] {
 export type SiteConfig = {
 	readonly siteId: string;
 	readonly endpoint: string;
+	/** Headers for manifest retrieval only. */
+	readonly headers?: HeadersInit;
 } & FetchOptions &
 	BatchOptions;
 
@@ -219,6 +221,14 @@ export async function createSiteAnalytics(
 ): Promise<SiteAnalytics> {
 	if (!config || !/^[A-Za-z0-9_-]+$/.test(config.siteId))
 		throw new TypeError("Invalid site ID");
+	const maxBatch = config.maxBatch ?? DEFAULT_MAX_BATCH;
+	const batchMs = config.batchMs ?? DEFAULT_BATCH_MS;
+	if (!Number.isSafeInteger(maxBatch) || maxBatch < 1)
+		throw new RangeError("Invalid maxBatch");
+	if (!Number.isSafeInteger(batchMs) || batchMs < 0 || batchMs > 2147483647)
+		throw new RangeError("Invalid batchMs");
+	// Manifest credentials never accompany requests to aggregator operators.
+	const { headers: _headers, ...transport } = config;
 	const base = new URL(config.endpoint);
 	const localHttp =
 		base.protocol === "http:" &&
@@ -275,7 +285,7 @@ export async function createSiteAnalytics(
 		if (refresh) lists.delete(aggregator);
 		let pending = lists.get(aggregator);
 		if (!pending) {
-			pending = fetchHpkeConfig(aggregator, config, version, refresh).catch(
+			pending = fetchHpkeConfig(aggregator, transport, version, refresh).catch(
 				(error) => {
 					lists.delete(aggregator);
 					throw error;
@@ -299,7 +309,7 @@ export async function createSiteAnalytics(
 				);
 			}
 			return client;
-		}, config);
+		}, transport);
 		queues.push(queue);
 		return queue;
 	}
