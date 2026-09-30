@@ -6,7 +6,7 @@ import {
 	type PreparedUpload,
 	type Task,
 	type UploadResult,
-} from "dap-ts";
+} from "@thibmeu/dap";
 
 export interface FetchOptions {
 	readonly fetch?: (request: Request) => Promise<Response>;

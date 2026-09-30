@@ -1,4 +1,4 @@
-import { Collector, prio3Count, prio3Histogram, Task } from "dap-ts";
+import { Collector, prio3Count, prio3Histogram, Task } from "@thibmeu/dap";
 import { collect } from "../src/collector.ts";
 import { fetchHpkeConfigs } from "../src/fetch.ts";
 import { Sinbad } from "../src/index.ts";

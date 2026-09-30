@@ -8,7 +8,7 @@ import {
 	type PreparedUpload,
 	prio3Count,
 	Task,
-} from "dap-ts";
+} from "@thibmeu/dap";
 
 const mode = process.argv[2] ?? "";
 const count = Number(process.argv[3] ?? 200);

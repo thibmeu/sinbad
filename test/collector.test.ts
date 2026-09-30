@@ -1,4 +1,4 @@
-import type { Collector, PreparedCollection } from "dap-ts";
+import type { Collector, PreparedCollection } from "@thibmeu/dap";
 import { expect, it, vi } from "vitest";
 import { collect, executeCollection } from "../src/collector.ts";
 

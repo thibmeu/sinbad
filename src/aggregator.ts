@@ -8,7 +8,7 @@ import {
 	type ReportRef,
 	type ReportRejectionEntry,
 	type Task,
-} from "dap-ts";
+} from "@thibmeu/dap";
 import { readLimited } from "./fetch.ts";
 
 // A DAP 19 Leader or Helper for one task over a small synchronous SQL

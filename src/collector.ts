@@ -6,7 +6,7 @@ import {
 	DAPError,
 	type PreparedCollection,
 	type Vdaf,
-} from "dap-ts";
+} from "@thibmeu/dap";
 import { type FetchOptions, send } from "./fetch.ts";
 
 export interface CollectionFetchOptions extends FetchOptions {

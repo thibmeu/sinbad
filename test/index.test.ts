@@ -1,5 +1,14 @@
-import { prio3Count, prio3Histogram, prio3Sum, Task, type Vdaf } from "dap-ts";
-import { decodeUploadRequest, encodeHpkeConfigList } from "dap-ts/messages";
+import {
+	prio3Count,
+	prio3Histogram,
+	prio3Sum,
+	Task,
+	type Vdaf,
+} from "@thibmeu/dap";
+import {
+	decodeUploadRequest,
+	encodeHpkeConfigList,
+} from "@thibmeu/dap/messages";
 import { expect, it, vi } from "vitest";
 import { createSiteAnalytics, Sinbad } from "../src/index.ts";
 

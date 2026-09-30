@@ -1,6 +1,6 @@
 # ⛵ Sinbad
 
-A small analytics library and Fetch transport for [dap-ts](https://github.com/thibmeu/dap-ts).
+A small analytics library and Fetch transport for [@thibmeu/dap](https://github.com/thibmeu/dap-ts).
 
 ```js
 import { Sinbad } from "sinbad";
@@ -20,7 +20,7 @@ Calls return Promises of a result with `accepted`, `rejected`, `ok`, and `sent`.
 
 ## Manifest
 
-The manifest maps event names and page paths to provisioned tasks. Each entry is the task ID and its encoded DAP TaskConfiguration, both in URL-safe Base 64 without padding, as dap-ts's `task.id` and `task.encodeConfiguration()` produce them. The configuration fixes the VDAF, so Sinbad needs nothing else:
+The manifest maps event names and page paths to provisioned tasks. Each entry is the task ID and its encoded DAP TaskConfiguration, both in URL-safe Base 64 without padding, as @thibmeu/dap's `task.id` and `task.encodeConfiguration()` produce them. The configuration fixes the VDAF, so Sinbad needs nothing else:
 
 ```json
 {
@@ -55,7 +55,7 @@ A custom `fetch` receives a Web `Request`. To send it elsewhere, copy the body w
 `sinbad/collector` exports `collect(collector, queryOrState, options)` and `executeCollection(preparedCollection, options)`. Collection credentials and the collector private key belong on a backend:
 
 ```js
-import { Collector } from "dap-ts";
+import { Collector } from "@thibmeu/dap";
 import { collect } from "sinbad/collector";
 
 const collector = await Collector.create(task, { configId, privateKey });
@@ -79,7 +79,7 @@ The package builds ESM JavaScript and TypeScript declarations from strict TypeSc
 
 The Leader checks each upload, stores the reports, and answers at once. A background loop builds aggregation jobs from stored reports, saves each job before sending it to the Helper, and commits each share once when the Helper answers. A Helper outage or a Leader restart only delays aggregation: saved jobs are sent again with the same bytes, and the Helper returns its stored response. The Leader serves `/hpke_config` with a one-day cache lifetime and answers CORS preflights on it and on the upload resource, so browsers on other origins can report.
 
-A collection may span any number of buckets. The Leader keeps a collection job pending until its interval has closed, every report in it is aggregated, and the batch reaches the minimum size, then collects it and refuses later reports for it with `batch-collected`. An interval that overlaps an earlier collection fails with `batchOverlap`. Errors are RFC 9457 problem documents carrying DAP's error types, built with dap-ts's `problemResponse`.
+A collection may span any number of buckets. The Leader keeps a collection job pending until its interval has closed, every report in it is aggregated, and the batch reaches the minimum size, then collects it and refuses later reports for it with `batch-collected`. An interval that overlaps an earlier collection fails with `batchOverlap`. Errors are RFC 9457 problem documents carrying DAP's error types, built with @thibmeu/dap's `problemResponse`.
 
 ```sh
 npm ci
@@ -106,11 +106,11 @@ Open <http://localhost:8080>. The demo server builds the manifest from the Leade
 
 `.github/workflows/ci.yml` runs the unit tests, typecheck, lint, build, demo bundle, and the loopback aggregator tests.
 
-dap-ts is private, so its pack lives in `vendor/` and `npm ci` needs nothing else. After changing dap-ts, build it in its sibling directory and run `npm run vendor`.
+@thibmeu/dap is not on npm yet, so its pack lives in `vendor/` and `npm ci` needs nothing else. After changing it, run `npm run vendor`, which packs the sibling `dap-ts` checkout.
 
 ## Security and privacy
 
-The dap-ts cryptography has not been audited, and this package is a prototype.
+The @thibmeu/dap cryptography has not been audited, and this package is a prototype.
 
 DAP hides what a measurement says. It does not hide that a client reported. The Leader sees each upload's source IP address, its arrival time, and its task ID, and DAP 19 Section 8 lists that metadata as a way for an Aggregator or a network observer to identify participating clients.
 

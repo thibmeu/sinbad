@@ -4,7 +4,7 @@ import {
 	type CollectionState,
 	Collector,
 	Task,
-} from "dap-ts";
+} from "@thibmeu/dap";
 import { collect } from "../src/collector.ts";
 import { bearer, HttpError, port as parsePort, serve } from "./http.ts";
 

@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { prio3Count, prio3Histogram, prio3Sum, Task } from "dap-ts";
+import { prio3Count, prio3Histogram, prio3Sum, Task } from "@thibmeu/dap";
 import {
 	createAggregator,
 	type SqlValue,

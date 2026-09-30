@@ -1,5 +1,5 @@
-import { Client, HpkeConfigList, prio3Count, Task } from "dap-ts";
-import { encodeHpkeConfigList } from "dap-ts/messages";
+import { Client, HpkeConfigList, prio3Count, Task } from "@thibmeu/dap";
+import { encodeHpkeConfigList } from "@thibmeu/dap/messages";
 import { expect, it, vi } from "vitest";
 import { execute, fetchHpkeConfigs, readLimited, send } from "../src/fetch.ts";
 

@@ -2,7 +2,7 @@
   "name": "sinbad",
   "version": "0.0.0",
   "private": true,
-  "description": "Simple analytics over dap-ts",
+  "description": "Simple analytics over @thibmeu/dap",
   "type": "module",
   "license": "MIT",
   "sideEffects": false,
@@ -40,15 +40,15 @@
     "test": "vitest run",
     "test:aggregate-server": "node test/aggregate-server.ts count && node test/aggregate-server.ts sum && node test/aggregate-server.ts histogram",
     "bench:count": "node bench/count.ts",
-    "vendor": "(cd ../dap-ts && npm pack --pack-destination ../sinbad/vendor) && npm install ./vendor/dap-ts-0.0.0.tgz --save-dev"
+    "vendor": "(cd ../dap-ts && npm pack --pack-destination ../sinbad/vendor) && npm install ./vendor/thibmeu-dap-0.1.0.tgz --save-dev"
   },
   "peerDependencies": {
-    "dap-ts": "*"
+    "@thibmeu/dap": "^0.1.0"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.13",
+    "@thibmeu/dap": "file:vendor/thibmeu-dap-0.1.0.tgz",
     "@types/node": "26.6.3",
-    "dap-ts": "file:vendor/dap-ts-0.0.0.tgz",
     "esbuild": "0.28.2",
     "typescript": "7.0.2",
     "vitest": "5.0.1"

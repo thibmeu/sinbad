@@ -16,11 +16,11 @@ import {
 	prio3Histogram,
 	prio3Sum,
 	Task,
-} from "dap-ts";
+} from "@thibmeu/dap";
 import {
 	encodeAggregateShareRequest,
 	encodeCollectionJobRequest,
-} from "dap-ts/messages";
+} from "@thibmeu/dap/messages";
 import { collect } from "../src/collector.ts";
 import { execute } from "../src/fetch.ts";
 

@@ -4,7 +4,7 @@ import {
 	Task,
 	type UploadResult,
 	type Vdaf,
-} from "dap-ts";
+} from "@thibmeu/dap";
 import {
 	execute,
 	type FetchOptions,
