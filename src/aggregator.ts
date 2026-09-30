@@ -179,12 +179,19 @@ export async function createAggregator(
 	const transaction = <T>(fn: () => T) => storage.transaction(fn);
 
 	for (const statement of SCHEMA) q(statement);
-	// The task stays fixed for the life of the storage.
-	const saved = one("SELECT value FROM meta WHERE name='task'")?.value;
-	if (saved && !same(bytes(saved), configuration))
-		throw new Error("Storage belongs to a different task configuration");
-	if (!saved)
-		q("INSERT INTO meta(name,value) VALUES ('task',?)", configuration);
+	// The task and role stay fixed for the life of the storage. Storage from
+	// before 'id' and 'role' were recorded adopts them on first start.
+	const encode = (value: string) => new TextEncoder().encode(value);
+	for (const [name, value] of [
+		["task", configuration],
+		["id", encode(task.id)],
+		["role", encode(role)],
+	] as const) {
+		const saved = one("SELECT value FROM meta WHERE name=?", name)?.value;
+		if (saved && !same(bytes(saved), value))
+			throw new Error(`Storage belongs to a different task (${name} differs)`);
+		if (!saved) q("INSERT INTO meta(name,value) VALUES (?,?)", name, value);
+	}
 
 	const collected = (time: number) =>
 		Boolean(
@@ -343,13 +350,21 @@ export async function createAggregator(
 				state: bytes(job.state),
 				times: JSON.parse(String(job.times)),
 			});
+		let limit = options.maxJobSize ?? 500;
 		for (;;) {
 			const rows = q(
 				"SELECT id,report FROM reports WHERE report IS NOT NULL ORDER BY time LIMIT ?",
-				options.maxJobSize ?? 500,
+				limit,
 			);
 			if (!rows.length) return;
 			const job = await leader!.prepare(rows.map((row) => bytes(row.report)));
+			// The Helper refuses bodies over MAX_BODY; halve the job until it fits.
+			// Each halving re-prepares the rows; size jobs from the VDAF
+			// up front if large tasks make that cost show.
+			if ((job.request?.length ?? 0) > MAX_BODY && rows.length > 1) {
+				limit = Math.ceil(rows.length / 2);
+				continue;
+			}
 			const id = job.request ? hex(await digest(job.request)) : "";
 			const times = job.reports.map((report) => report.time);
 			transaction(() => {

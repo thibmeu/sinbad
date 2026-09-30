@@ -1,11 +1,17 @@
 import { DatabaseSync } from "node:sqlite";
-import { Client, prio3Count, Task } from "@thibmeu/dap";
+import {
+	Client,
+	HpkeConfigList,
+	prio3Count,
+	prio3Histogram,
+	Task,
+	type Vdaf,
+} from "@thibmeu/dap";
 import { expect, it, vi } from "vitest";
 import { createAggregator, type Storage } from "../src/aggregator.ts";
 
-function options(url: string) {
-	const db = new DatabaseSync(":memory:");
-	const storage: Storage = {
+function sqlite(db: DatabaseSync): Storage {
+	return {
 		query: (sql, ...params) =>
 			db.prepare(sql).all(...params) as ReturnType<Storage["query"]>,
 		transaction: (fn) => {
@@ -20,8 +26,13 @@ function options(url: string) {
 			}
 		},
 	};
+}
+
+function options(url: string, vdaf: Vdaf = prio3Count(), fill = 0) {
+	const db = new DatabaseSync(":memory:");
+	const storage = sqlite(db);
 	const task = Task.create({
-		id: new Uint8Array(32).toBase64({
+		id: new Uint8Array(32).fill(fill).toBase64({
 			alphabet: "base64url",
 			omitPadding: true,
 		}),
@@ -30,7 +41,7 @@ function options(url: string) {
 		timePrecision: 60,
 		minBatchSize: 100,
 		batchMode: "time-interval",
-		vdaf: prio3Count(),
+		vdaf,
 	});
 	const fetch = vi.fn(
 		async (_request: Request) => new Response(null, { status: 503 }),
@@ -101,3 +112,74 @@ it.each([
 		db.close();
 	}
 });
+
+it("refuses storage that belongs to another task ID or role", async () => {
+	const { db, config } = options("https://helper.example/");
+	try {
+		await createAggregator(config);
+		const other = options("https://helper.example/", prio3Count(), 1).config;
+		await expect(
+			createAggregator({ ...other, storage: config.storage }),
+		).rejects.toThrow("id differs");
+		await expect(
+			createAggregator({ ...config, role: "helper" }),
+		).rejects.toThrow("role differs");
+		await createAggregator(config);
+	} finally {
+		db.close();
+	}
+});
+
+it("splits a large-histogram backlog into jobs the Helper accepts", async () => {
+	const vdaf = prio3Histogram(512, 512);
+	const leaderSide = options("https://helper.example/", vdaf);
+	const helperSide = options("https://helper.example/", vdaf);
+	try {
+		const helper = await createAggregator({
+			...helperSide.config,
+			role: "helper",
+			token: "leader-token",
+			verifyKeys: leaderSide.config.verifyKeys,
+		});
+		const leader = await createAggregator({
+			...leaderSide.config,
+			helper: {
+				url: "https://helper.example/",
+				token: "leader-token",
+				fetch: (request) => helper.fetch(request),
+			},
+		});
+		const list = async (aggregator: typeof leader) =>
+			HpkeConfigList.parse(
+				new Uint8Array(
+					await (
+						await aggregator.fetch(
+							new Request("https://aggregator.example/hpke_config"),
+						)
+					).arrayBuffer(),
+				),
+			);
+		const client = await Client.create(leaderSide.config.task, {
+			hpke: { leader: await list(leader), helper: await list(helper) },
+		});
+		const reports = await client.prepareReports(
+			Array.from({ length: 100 }, (_, i) => i % 512),
+		);
+		// The verifier grows with the chunk length: each report adds about 16 KB
+		// to a job, so 100 reports exceed the Helper's 1 MiB limit.
+		for (let i = 0; i < reports.length; i += 10) {
+			const response = await leader.fetch(
+				client.prepareUpload(reports.slice(i, i + 10)).request,
+			);
+			expect(response.status).toBe(200);
+		}
+		await leader.aggregate();
+		for (const { db } of [leaderSide, helperSide])
+			expect(db.prepare("SELECT SUM(count) AS n FROM buckets").get()?.n).toBe(
+				100,
+			);
+	} finally {
+		leaderSide.db.close();
+		helperSide.db.close();
+	}
+}, 120_000);

@@ -238,13 +238,16 @@ const staleConfig =
 	};
 
 it("refetches HPKE configs once after hpke_unknown_config_id and retries only those reports", async () => {
+	vi.useFakeTimers({ toFake: ["Date"] });
 	let failures = 1;
 	const { fetch, requests, posts } = site(
 		{ events: { click: entry(1, prio3Count()) } },
-		async (request) =>
-			failures-- > 0
-				? staleConfig((index) => index === 1)(request)
-				: new Response(null),
+		async (request) => {
+			if (failures-- <= 0) return new Response(null);
+			// The retry happens two batch buckets later.
+			vi.setSystemTime(Date.now() + 2 * 3600_000);
+			return staleConfig((index) => index === 1)(request);
+		},
 	);
 	const analytics = await createSiteAnalytics({
 		siteId: "rotate",
@@ -259,10 +262,15 @@ it("refetches HPKE configs once after hpke_unknown_config_id and retries only th
 		]);
 		expect(results.map((result) => result.ok)).toEqual([true, true]);
 		expect(posts()).toHaveLength(2);
-		// The retry carries only the rejected report, so none is counted twice.
-		expect(
-			decodeUploadRequest(new Uint8Array(await posts()[1]!.arrayBuffer())),
-		).toHaveLength(1);
+		const [first, retry] = await Promise.all(
+			posts().map(async (post) =>
+				decodeUploadRequest(new Uint8Array(await post.arrayBuffer())),
+			),
+		);
+		// The retry carries only the rejected report, so none is counted twice,
+		// and keeps its original time, so it stays in its batch bucket.
+		expect(retry).toHaveLength(1);
+		expect(retry![0]!.metadata.time).toBe(first![1]!.metadata.time);
 		// Both lists were discarded and retrieved again for the retry.
 		expect(requests.filter((r) => r.url.endsWith("hpke_config"))).toHaveLength(
 			4,
@@ -274,6 +282,7 @@ it("refetches HPKE configs once after hpke_unknown_config_id and retries only th
 		).toEqual(["default", "default", "reload", "reload"]);
 	} finally {
 		analytics.close();
+		vi.useRealTimers();
 	}
 
 	// When the retry fails too, the client gives up rather than looping.
@@ -294,6 +303,57 @@ it("refetches HPKE configs once after hpke_unknown_config_id and retries only th
 		expect(stubborn.posts()).toHaveLength(2);
 	} finally {
 		again.close();
+	}
+});
+
+it("tracks again once a failed HPKE retrieval recovers", async () => {
+	let down = true;
+	const { fetch, posts } = site({ events: { click: entry(1, prio3Count()) } });
+	const analytics = await createSiteAnalytics({
+		siteId: "offline",
+		endpoint: "https://analytics.example/",
+		fetch: async (request) => {
+			if (down && request.url.endsWith("hpke_config"))
+				throw new TypeError("offline");
+			return fetch(request);
+		},
+		batchMs: 0,
+	});
+	try {
+		await expect(analytics.track("click")).rejects.toThrow("offline");
+		down = false;
+		expect((await analytics.track("click")).ok).toBe(true);
+		expect(posts()).toHaveLength(1);
+	} finally {
+		analytics.close();
+	}
+});
+
+it("uploads the valid reports of a batch holding an invalid measurement", async () => {
+	const { fetch, posts } = site({
+		events: { purchase: entry(2, prio3Sum(100)) },
+	});
+	const analytics = await createSiteAnalytics({
+		siteId: "mixed",
+		endpoint: "https://analytics.example/",
+		fetch,
+		batchMs: 50,
+	});
+	try {
+		const results = await Promise.allSettled(
+			[10, 101, 20].map((value) => analytics.track("purchase", { value })),
+		);
+		expect(results.map((result) => result.status)).toEqual([
+			"fulfilled",
+			"rejected",
+			"fulfilled",
+		]);
+		expect(posts()).toHaveLength(1);
+		expect(
+			decodeUploadRequest(new Uint8Array(await posts()[0]!.arrayBuffer())),
+		).toHaveLength(2);
+	} finally {
+		analytics.close();
 	}
 });
 

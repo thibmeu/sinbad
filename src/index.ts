@@ -86,12 +86,26 @@ function uploader(
 	}
 
 	async function send(entries: Queued[], unloading: boolean): Promise<void> {
+		// One report that fails to prepare, such as an out-of-range value,
+		// must not hold back the rest of the batch.
+		const settled =
+			unloading && entries.every((entry) => entry.prepared)
+				? entries.map((entry) => ({
+						status: "fulfilled" as const,
+						value: entry.prepared!,
+					}))
+				: await Promise.allSettled(entries.map((entry) => entry.ready));
+		const ready: Queued[] = [];
+		const prepared: { client: Client; report: PreparedReport }[] = [];
+		settled.forEach((result, index) => {
+			if (result.status === "rejected") entries[index]!.reject(result.reason);
+			else {
+				ready.push(entries[index]!);
+				prepared.push(result.value);
+			}
+		});
+		if (!ready.length) return;
 		try {
-			const measurements = entries.map((entry) => entry.measurement);
-			const prepared =
-				unloading && entries.every((entry) => entry.prepared)
-					? entries.map((entry) => entry.prepared!)
-					: await Promise.all(entries.map((entry) => entry.ready));
 			const results = await upload(
 				prepared[0]!.client,
 				prepared.map((entry) => entry.report),
@@ -102,12 +116,17 @@ function uploader(
 			);
 			if (stale.length) {
 				// DAP 19, 4.4.2.2: drop the cached lists, retry the affected reports
-				// once with fresh ones, then give up.
+				// once with fresh ones, then give up. Each keeps its original time,
+				// so a retry never moves an event into another batch bucket.
 				const fresh = await client(true);
 				const retried = await upload(
 					fresh,
-					await fresh.prepareReports(
-						stale.map((index) => measurements[index]!),
+					await Promise.all(
+						stale.map((index) =>
+							fresh.prepareReport(ready[index]!.measurement, {
+								time: prepared[index]!.report.time,
+							}),
+						),
 					),
 					unloading,
 				);
@@ -115,11 +134,11 @@ function uploader(
 					results[index] = retried[i]!;
 				});
 			}
-			entries.forEach((entry, index) => {
+			ready.forEach((entry, index) => {
 				entry.resolve(results[index]!);
 			});
 		} catch (error) {
-			for (const entry of entries) entry.reject(error);
+			for (const entry of ready) entry.reject(error);
 		}
 	}
 
@@ -301,12 +320,19 @@ export async function createSiteAnalytics(
 		let client: Promise<Client> | undefined;
 		const queue = uploader((refresh = false) => {
 			if (refresh || !client) {
-				client = Promise.all([
+				const pending: Promise<Client> = Promise.all([
 					list(task.leader, task.dapVersion, refresh),
 					list(task.helper, task.dapVersion, refresh),
-				]).then(([leader, helper]) =>
-					Client.create<Vdaf>(task, { hpke: { leader, helper } }),
-				);
+				])
+					.then(([leader, helper]) =>
+						Client.create<Vdaf>(task, { hpke: { leader, helper } }),
+					)
+					.catch((error) => {
+						// Retry on the next report, unless a newer client replaced this one.
+						if (client === pending) client = undefined;
+						throw error;
+					});
+				client = pending;
 			}
 			return client;
 		}, transport);
