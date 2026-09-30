@@ -171,6 +171,27 @@ try {
 			),
 			{ fetch: routed },
 		);
+	async function waitCommitted(time: number): Promise<void> {
+		const stores = ["leader", "helper"].map(
+			(role) => new DatabaseSync(join(directory, `${role}.sqlite`)),
+		);
+		try {
+			for (let i = 0; i < 100; i++) {
+				if (
+					stores.every(
+						(db) =>
+							db.prepare("SELECT count FROM buckets WHERE time=?").get(time)
+								?.count === 1,
+					)
+				)
+					return;
+				await delay(50);
+			}
+			throw new Error(`Report at ${time} was not committed by both roles`);
+		} finally {
+			for (const db of stores) db.close();
+		}
+	}
 
 	// Upload checks answer without waiting for the Helper.
 	const tooEarly = await send([Date.now() + 10 * 60_000]);
@@ -287,6 +308,21 @@ try {
 		(error: DAPError) => error.problem?.dapError === "batchOverlap",
 	);
 	assert.equal((await send([base])).rejected[0]?.error, "batch-collected");
+	// A Helper outage after the Leader reserves a window must not make the
+	// collection report an overlap with itself on retry.
+	const retryWindow = base + 720_000;
+	assert.equal((await send([retryWindow])).accepted.length, 1);
+	await waitCommitted(retryWindow);
+	await stop(helper);
+	const retryQuery = { start: retryWindow, end: retryWindow + 120_000 };
+	await assert.rejects(
+		collect(collector, retryQuery, { ...options, maxPolls: 0 }),
+		(error: DAPError) => error.code === "HttpError",
+	);
+	helper = await startRole("helper", helperPort, helperUrl);
+	const recovered = await collect(collector, retryQuery, options);
+	assert.equal(recovered.status, "complete");
+	if (recovered.status === "complete") assert.equal(recovered.reportCount, 1);
 
 	// The analytics backend collects ready two-minute windows on its own.
 	const analyticsPort = await freePort();
@@ -381,6 +417,89 @@ try {
 	}
 	assert.equal(data.windows[0]?.reportCount, 1);
 	await stop(analytics);
+	// Persist the query before contacting the Leader, so a failed request
+	// survives a backend restart even without a Location response.
+	const offline = base + 600_000;
+	analytics = await startAnalytics();
+	await stop(leader);
+	const failed = await fetch(
+		`${analyticsUrl}/internal/collect?start=${offline}`,
+		{
+			method: "POST",
+			headers: auth,
+		},
+	);
+	assert.equal(failed.status, 502);
+	const savedIntent = new DatabaseSync(join(directory, "analytics.sqlite"));
+	assert.deepEqual(
+		JSON.parse(
+			String(
+				savedIntent
+					.prepare("SELECT state FROM collections WHERE start=?")
+					.get(offline)?.state,
+			),
+		),
+		{ start: offline, end: offline + 120_000 },
+	);
+	savedIntent.close();
+	await stop(analytics);
+	leader = await startRole("leader", leaderPort, helperUrl);
+	assert.equal((await send([offline])).accepted.length, 1);
+	analytics = await startAnalytics();
+	for (let i = 0; i < 100; i++) {
+		data = await read(offline, offline + 120_000);
+		if (data.windows.length) break;
+		await delay(100);
+	}
+	assert.equal(data.windows[0]?.reportCount, 1);
+	await stop(analytics);
+
+	// Two overlapping requests can pass an asynchronous HPKE seal at once;
+	// only one may commit its interval at the Helper.
+	const overlap = base + 480_000;
+	assert.equal((await send([overlap])).accepted.length, 1);
+	await waitCommitted(overlap);
+	const helperStore = new DatabaseSync(join(directory, "helper.sqlite"));
+	const bucket = helperStore
+		.prepare("SELECT bucket FROM buckets WHERE time=?")
+		.get(overlap)?.bucket as Uint8Array;
+	helperStore.close();
+	const shareLength = kind === "histogram" ? 64 : 8;
+	const checksum = bucket.slice(shareLength + 8, shareLength + 40);
+	const requests = [1, 2].map((duration) =>
+		fetch(new URL(`tasks/${task.id}/aggregate_shares`, helperUrl), {
+			method: "POST",
+			headers: {
+				...auth,
+				"content-type": "application/ppm-dap;message=aggregate-share-req",
+			},
+			body: encodeAggregateShareRequest(
+				encodeCollectionJobRequest(
+					overlap / (task.timePrecision * 1000),
+					duration,
+				),
+				1,
+				checksum,
+			) as Uint8Array<ArrayBuffer>,
+		}),
+	);
+	const simultaneous = await Promise.all(requests);
+	assert.deepEqual(
+		simultaneous.map((reply) => reply.status).sort(),
+		[201, 400],
+	);
+	assert.equal(
+		(await simultaneous.find((reply) => reply.status === 400)!.json()).type,
+		"urn:ietf:params:ppm:dap:error:batchOverlap",
+	);
+	const checkedStore = new DatabaseSync(join(directory, "helper.sqlite"));
+	assert.equal(
+		checkedStore
+			.prepare("SELECT COUNT(*) AS n FROM collections WHERE start<=? AND end>?")
+			.get(overlap, overlap)?.n,
+		1,
+	);
+	checkedStore.close();
 	console.log(
 		`${kind}: crashes, retries, and collection commit each report once`,
 	);

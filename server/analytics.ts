@@ -1,5 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
-import { type CollectionState, Collector, Task } from "dap-ts";
+import {
+	type CollectionQuery,
+	type CollectionState,
+	Collector,
+	Task,
+} from "dap-ts";
 import { collect } from "../src/collector.ts";
 import { bearer, HttpError, port as parsePort, serve } from "./http.ts";
 
@@ -90,10 +95,19 @@ async function collectWindow(start: number): Promise<void> {
 			start,
 			(async () => {
 				const state = get.get(start)?.state;
+				// A crash after the Leader reserves this window must leave a
+				// durable query that can be posted again on restart.
+				if (!state)
+					save.run(
+						start,
+						JSON.stringify({ start, end: start + window }),
+						null,
+						null,
+					);
 				const progress = await collect(
 					collector,
 					state
-						? (JSON.parse(String(state)) as CollectionState)
+						? (JSON.parse(String(state)) as CollectionQuery | CollectionState)
 						: { start, end: start + window },
 					{
 						fetch: routedFetch,

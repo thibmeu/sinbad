@@ -393,7 +393,8 @@ export async function createAggregator(
 			// Another job may have collected part of this interval meanwhile.
 			if (
 				one(
-					"SELECT 1 FROM collections WHERE collected=1 AND start<? AND end>? LIMIT 1",
+					"SELECT 1 FROM collections WHERE id!=? AND collected=1 AND start<? AND end>? LIMIT 1",
+					id,
 					end,
 					start,
 				)
@@ -564,37 +565,60 @@ export async function createAggregator(
 			return dap(bytes(saved.response), "aggregate-share", 200, { location });
 		const job = helper!.aggregateShare(body);
 		const { start, end } = job.interval;
-		if (
-			one(
-				"SELECT 1 FROM collections WHERE id!=? AND start<? AND end>? LIMIT 1",
-				id,
-				end,
-				start,
-			)
-		)
-			throw new DAPError(
-				"InvalidMessage",
-				"Interval overlaps another collection",
-				{ type: "batchOverlap" },
-			);
 		const merged = helper!.mergeBuckets(
 			q("SELECT bucket FROM buckets WHERE time>=? AND time<?", start, end).map(
 				(row) => bytes(row.bucket),
 			),
 		);
 		const response = await job.finish(merged);
-		transaction(() => {
-			if (!one("SELECT 1 FROM collections WHERE id=?", id))
+		const result = transaction(() => {
+			const prior = one(
+				"SELECT request,response FROM collections WHERE id=?",
+				id,
+			);
+			if (prior) {
+				if (!same(bytes(prior.request), body) || !prior.response)
+					throw new HttpError(409, "Aggregate share request conflict");
+				return { body: bytes(prior.response), status: 200 };
+			}
+			if (
+				one(
+					"SELECT 1 FROM collections WHERE start<? AND end>? LIMIT 1",
+					end,
+					start,
+				)
+			)
+				throw new DAPError(
+					"InvalidMessage",
+					"Interval overlaps another collection",
+					{ type: "batchOverlap" },
+				);
+			const current = helper!.mergeBuckets(
 				q(
-					"INSERT INTO collections(id,request,start,end,collected,response) VALUES (?,?,?,?,1,?)",
-					id,
-					body,
+					"SELECT bucket FROM buckets WHERE time>=? AND time<?",
 					start,
 					end,
-					response,
+				).map((row) => bytes(row.bucket)),
+			);
+			if (!same(current, merged))
+				throw new DAPError(
+					"InvalidMessage",
+					"Batch changed during collection",
+					{
+						type: "batchMismatch",
+					},
 				);
+			q(
+				"INSERT INTO collections(id,request,start,end,collected,response) VALUES (?,?,?,?,1,?)",
+				id,
+				body,
+				start,
+				end,
+				response,
+			);
+			return { body: response, status: 201 };
 		});
-		return dap(response, "aggregate-share", 201, { location });
+		return dap(result.body, "aggregate-share", result.status, { location });
 	}
 
 	// --- Routes ---------------------------------------------------------------
