@@ -1,6 +1,7 @@
 import {
 	Client,
 	type HpkeConfigList,
+	type PreparedReport,
 	Task,
 	type UploadResult,
 	type Vdaf,
@@ -45,6 +46,8 @@ function drop(message: string): Promise<TrackResult> {
 type Measurement = number | bigint;
 interface Queued {
 	readonly measurement: Measurement;
+	readonly ready: Promise<{ client: Client; report: PreparedReport }>;
+	prepared?: { client: Client; report: PreparedReport };
 	resolve(result: TrackResult): void;
 	reject(error: unknown): void;
 }
@@ -72,10 +75,9 @@ function uploader(
 
 	async function upload(
 		active: Client,
-		measurements: readonly Measurement[],
+		reports: readonly PreparedReport[],
 		keepalive: boolean,
 	) {
-		const reports = await active.prepareReports(measurements);
 		const result = await execute(active.prepareUpload(reports), {
 			...options,
 			keepalive,
@@ -86,16 +88,27 @@ function uploader(
 	async function send(entries: Queued[], unloading: boolean): Promise<void> {
 		try {
 			const measurements = entries.map((entry) => entry.measurement);
-			const results = await upload(await client(), measurements, unloading);
+			const prepared =
+				unloading && entries.every((entry) => entry.prepared)
+					? entries.map((entry) => entry.prepared!)
+					: await Promise.all(entries.map((entry) => entry.ready));
+			const results = await upload(
+				prepared[0]!.client,
+				prepared.map((entry) => entry.report),
+				unloading,
+			);
 			const stale = results.flatMap((result, index) =>
 				result.rejected[0]?.error === "hpke-unknown-config-id" ? [index] : [],
 			);
 			if (stale.length) {
 				// DAP 19, 4.4.2.2: drop the cached lists, retry the affected reports
 				// once with fresh ones, then give up.
+				const fresh = await client(true);
 				const retried = await upload(
-					await client(true),
-					stale.map((index) => measurements[index]!),
+					fresh,
+					await fresh.prepareReports(
+						stale.map((index) => measurements[index]!),
+					),
 					unloading,
 				);
 				stale.forEach((index, i) => {
@@ -113,14 +126,35 @@ function uploader(
 	function flush(unloading = false): void {
 		if (timer !== undefined) clearTimeout(timer);
 		timer = undefined;
-		while (queue.length) void send(queue.splice(0, maxBatch), unloading);
+		while (queue.length) {
+			const batch = queue.splice(0, maxBatch);
+			if (!unloading) void send(batch, false);
+			else {
+				// Send sealed reports before waiting for any unfinished encryption.
+				const ready = batch.filter((entry) => entry.prepared);
+				const pending = batch.filter((entry) => !entry.prepared);
+				if (ready.length) void send(ready, true);
+				if (pending.length) void send(pending, true);
+			}
+		}
 	}
 
 	return {
 		flush,
 		report(measurement: Measurement): Promise<TrackResult> {
 			return new Promise((resolve, reject) => {
-				queue.push({ measurement, resolve, reject });
+				const ready = client().then(async (active) => ({
+					client: active,
+					report: await active.prepareReport(measurement),
+				}));
+				const entry: Queued = { measurement, ready, resolve, reject };
+				void ready.then(
+					(prepared) => {
+						entry.prepared = prepared;
+					},
+					() => {},
+				);
+				queue.push(entry);
 				if (queue.length >= maxBatch || batchMs === 0) flush();
 				else if (timer === undefined) {
 					timer = setTimeout(flush, batchMs);
@@ -241,10 +275,12 @@ export async function createSiteAnalytics(
 		if (refresh) lists.delete(aggregator);
 		let pending = lists.get(aggregator);
 		if (!pending) {
-			pending = fetchHpkeConfig(aggregator, config, version).catch((error) => {
-				lists.delete(aggregator);
-				throw error;
-			});
+			pending = fetchHpkeConfig(aggregator, config, version, refresh).catch(
+				(error) => {
+					lists.delete(aggregator);
+					throw error;
+				},
+			);
 			lists.set(aggregator, pending);
 		}
 		return pending;

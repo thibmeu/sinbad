@@ -90,17 +90,20 @@ export async function execute(
 /**
  * Retrieve one Aggregator's list. Tasks that share an Aggregator share this
  * resource, so callers should cache it by base URL rather than by task.
+ * Refresh after a key rejection bypasses the browser's HTTP cache.
  */
 export async function fetchHpkeConfig(
 	base: string,
 	options: FetchOptions = {},
 	dapVersion: 18 | 19 = 19,
+	refresh = false,
 ): Promise<HpkeConfigList> {
 	const response = await send(
 		new Request(`${base.endsWith("/") ? base : `${base}/`}hpke_config`, {
 			headers: { accept: "application/ppm-dap;message=hpke-config-list" },
 			redirect: "manual",
 			credentials: "omit",
+			...(refresh ? { cache: "reload" } : {}),
 		}),
 		options,
 	);

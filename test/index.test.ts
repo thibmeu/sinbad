@@ -1,4 +1,5 @@
 import {
+	Client,
 	prio3Count,
 	prio3Histogram,
 	prio3Sum,
@@ -189,6 +190,7 @@ it("batches reports for one task into a single upload", async () => {
 });
 
 it("sends what is queued with keepalive when the page is hidden", async () => {
+	const prepare = vi.spyOn(Client.prototype, "prepareReport");
 	const listeners = new Map<string, () => void>();
 	vi.stubGlobal("addEventListener", (type: string, listener: () => void) =>
 		listeners.set(type, listener),
@@ -205,12 +207,18 @@ it("sends what is queued with keepalive when the page is hidden", async () => {
 			batchMs: 60_000,
 		});
 		const pending = analytics.track("click");
+		await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(1));
+		await prepare.mock.results[0]!.value;
+		await Promise.resolve();
 		listeners.get("pagehide")!();
+		// Dispatch starts inside the unload listener, before any further await.
+		expect(posts()).toHaveLength(1);
 		expect((await pending).ok).toBe(true);
 		expect(posts()[0]!.keepalive).toBe(true);
 		analytics.close();
 		expect(listeners.size).toBe(0);
 	} finally {
+		prepare.mockRestore();
 		vi.unstubAllGlobals();
 	}
 });
@@ -259,6 +267,11 @@ it("refetches HPKE configs once after hpke_unknown_config_id and retries only th
 		expect(requests.filter((r) => r.url.endsWith("hpke_config"))).toHaveLength(
 			4,
 		);
+		expect(
+			requests
+				.filter((r) => r.url.endsWith("hpke_config"))
+				.map((request) => request.cache),
+		).toEqual(["default", "default", "reload", "reload"]);
 	} finally {
 		analytics.close();
 	}
