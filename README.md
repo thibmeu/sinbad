@@ -168,16 +168,16 @@ has closed, all its reports are aggregated, and the batch reaches the minimum
 size; later reports for it get `batch-collected`, and overlapping collections
 get `batchOverlap`. Errors are RFC 9457 problem documents.
 
-## Example servers
+## Examples
 
-`server/aggregator.ts` runs one role on `node:sqlite`, and
-`server/analytics.ts` is a collector backend that collects fixed windows and
+`examples/aggregator.ts` runs one role on `node:sqlite`, and
+`examples/analytics.ts` is a collector backend that collects fixed windows and
 serves the totals. Both are examples, not hardened services.
 
 ```sh
 npm ci
-docker compose -f compose.count.yaml up -d  # Leader on :9011, Helper on :9012
-npm run demo                                 # http://localhost:8080
+docker compose -f examples/compose.yaml up -d  # Leader on :9011, Helper on :9012
+npm run examples:site                           # http://localhost:8080
 ```
 
 Set `VDAF` to `count`, `sum`, or `histogram`, and `COLLECTOR_PUBLIC_KEY_HEX`

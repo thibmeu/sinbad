@@ -86,7 +86,7 @@ async function spawnServer(
 }
 function startRole(role: string, port: number, helperUrl: string, extra = {}) {
 	return spawnServer(
-		"server/aggregator.ts",
+		"examples/aggregator.ts",
 		{
 			ROLE: role,
 			PORT: String(port),
@@ -329,7 +329,7 @@ try {
 	const analyticsUrl = `http://127.0.0.1:${analyticsPort}`;
 	const startAnalytics = () =>
 		spawnServer(
-			"server/analytics.ts",
+			"examples/analytics.ts",
 			{
 				PORT: String(analyticsPort),
 				LEADER_URL: leaderUrl,

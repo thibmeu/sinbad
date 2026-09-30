@@ -1,6 +1,6 @@
 {
   "files": {
-    "includes": ["**", "!demo/app.bundle.js"]
+    "includes": ["**", "!examples/site/app.bundle.js"]
   },
   "linter": {
     "rules": {

@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
-import { HttpError, port as parsePort, serve } from "../server/http.ts";
+import { HttpError, port as parsePort, serve } from "../http.ts";
 
-// Serves the demo page and its manifest, and forwards DAP requests to the
+// Serves the example site and its manifest, and forwards DAP requests to the
 // example aggregators, which the task names by placeholder HTTPS hosts.
 
 const env = process.env;
@@ -20,7 +20,7 @@ const files: Record<string, [string, string]> = {
 serve(
 	async (request) => {
 		const { pathname, search } = new URL(request.url);
-		if (request.method === "GET" && pathname === "/sites/demo/manifest")
+		if (request.method === "GET" && pathname === "/sites/example/manifest")
 			return Response.json(
 				{ events: { click: task } },
 				{ headers: { "cache-control": "no-store" } },
@@ -46,5 +46,5 @@ serve(
 	},
 	port,
 	env.HOST ?? "127.0.0.1",
-	"demo",
+	"site",
 );

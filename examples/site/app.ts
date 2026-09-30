@@ -21,9 +21,9 @@ const proxyFetch = async (request: Request) => {
 };
 
 try {
-	// batchMs 0 keeps the demo button responsive; a site would keep the default.
+	// batchMs 0 keeps the example button responsive; a real site would keep the default.
 	await Sinbad.init({
-		siteId: "demo",
+		siteId: "example",
 		endpoint: location.origin,
 		fetch: proxyFetch,
 		batchMs: 0,

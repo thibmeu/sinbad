@@ -7,5 +7,5 @@
     "allowImportingTsExtensions": true,
     "types": ["node"]
   },
-  "include": ["src", "server", "test", "bench", "demo"]
+  "include": ["src", "examples", "test", "bench"]
 }
