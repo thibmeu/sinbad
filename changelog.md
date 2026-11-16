@@ -2,7 +2,7 @@
 
 Notable changes to Sinbad, following [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [0.2.0] - 2026-11-15
 
 ### Changed
 
@@ -29,4 +29,5 @@ First release, built on @thibmeu/dap 0.1.0 (DAP draft 19).
 - `sinbad/collector` to poll collection jobs and resume pending ones.
 - `sinbad/aggregator`, a Leader and Helper over synchronous SQLite, with example servers.
 
+[0.2.0]: https://github.com/thibmeu/sinbad/releases/tag/v0.2.0
 [0.1.0]: https://github.com/thibmeu/sinbad/releases/tag/v0.1.0
