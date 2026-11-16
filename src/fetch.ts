@@ -95,7 +95,7 @@ export async function execute(
 export async function fetchHpkeConfig(
 	base: string,
 	options: FetchOptions = {},
-	dapVersion: 18 | 19 = 19,
+	dapVersion: Task["dapVersion"] = 20,
 	refresh = false,
 ): Promise<HpkeConfigList> {
 	const response = await send(

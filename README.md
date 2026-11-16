@@ -92,7 +92,7 @@ Each aggregator's HPKE configuration is fetched once, on the first report that
 needs it, and shared by every task on that aggregator. If the Leader answers
 `hpke-unknown-config-id`, Sinbad refetches the configurations, bypassing the
 HTTP cache, and retries the rejected reports once, as
-[draft-ietf-ppm-dap-19, Section 4.4.2.2](https://www.ietf.org/archive/id/draft-ietf-ppm-dap-19.html#section-4.4.2.2)
+[draft-ietf-ppm-dap-20, Section 4.4.2.2](https://www.ietf.org/archive/id/draft-ietf-ppm-dap-20.html#section-4.4.2.2)
 recommends.
 
 A custom `fetch` receives a Web `Request`. To send it elsewhere, copy the body
@@ -195,14 +195,14 @@ aggregation throughput against Compose.
 
 DAP hides what a client reported, not that it reported. The Leader sees each
 upload's source IP, arrival time, and task ID
-([draft-ietf-ppm-dap-19, Section 8](https://www.ietf.org/archive/id/draft-ietf-ppm-dap-19.html#section-8)).
+([draft-ietf-ppm-dap-20, Section 8](https://www.ietf.org/archive/id/draft-ietf-ppm-dap-20.html#section-8)).
 Sinbad uses a task per page path, so the task ID says which page a visitor
 loaded, and with the source IP that is a clickstream. Batching reduces the
 number of requests but does not remove the signal.
 
 Before tracking real visitors:
 
-- Send reports through an Oblivious HTTP relay ([Section 8.4](https://www.ietf.org/archive/id/draft-ietf-ppm-dap-19.html#section-8.4)), so the relay sees the client address instead of the Leader.
+- Send reports through an Oblivious HTTP relay ([Section 8.4](https://www.ietf.org/archive/id/draft-ietf-ppm-dap-20.html#section-8.4)), so the relay sees the client address instead of the Leader.
 - Keep page categories few and fixed. A task per arbitrary URL both shrinks batches and sharpens the signal.
 - Set a minimum batch size that protects a single visitor, with a time precision and collection window coarse enough to reach it.
 - Run the Leader and Helper as independent operators. DAP gives no privacy if they collude.

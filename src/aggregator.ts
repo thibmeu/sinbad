@@ -11,7 +11,7 @@ import {
 } from "@thibmeu/dap";
 import { readLimited } from "./fetch.ts";
 
-// A DAP 19 Leader or Helper for one task over a small synchronous SQL
+// A DAP 20 Leader or Helper for one task over a small synchronous SQL
 // interface, so the same code runs on node:sqlite and on a Durable Object.
 // The Leader stores uploads and aggregates them in `aggregate()` passes the
 // host schedules, so an upload never waits for the Helper and a Helper
@@ -150,6 +150,9 @@ export async function createAggregator(
 	options: SinbadAggregatorOptions,
 ): Promise<SinbadAggregator> {
 	const { role, task, storage } = options;
+	// Buckets and collections here are keyed by report time.
+	if (task.batchMode !== "time-interval")
+		throw new TypeError("Sinbad aggregators support time-interval tasks only");
 	const target = options.helper;
 	const helperUrl = target ? new URL(target.url) : undefined;
 	if (helperUrl) {
@@ -256,7 +259,7 @@ export async function createAggregator(
 		transaction(() => {
 			checked.reports.forEach((report, i) => {
 				const prior = one("SELECT digest FROM reports WHERE id=?", report.id);
-				// DAP 19, 4.4.2.2: an identical retry is accepted again; another
+				// DAP 20, 4.4.2.2: an identical retry is accepted again; another
 				// report with the same ID is a replay.
 				if (prior) {
 					if (!same(bytes(prior.digest), digests[i]!))
@@ -318,7 +321,7 @@ export async function createAggregator(
 		const response = new Uint8Array(await reply.arrayBuffer());
 		let results: ReturnType<Leader["finish"]> | undefined;
 		if (reply.status >= 400 && reply.status < 500)
-			// The Helper refused the job itself; abandon it (DAP 19, 4.5.5).
+			// The Helper refused the job itself; abandon it (DAP 20, 4.5.5).
 			console.error(
 				"Helper refused job",
 				job.id,
@@ -420,7 +423,7 @@ export async function createAggregator(
 			);
 			if (buckets.some((bucket) => Number(bucket.pending))) return undefined;
 			const merged = leader!.mergeBuckets(buckets.map((b) => bytes(b.bucket)));
-			// DAP 19, 4.6.1: wait for more reports rather than fail.
+			// DAP 20, 4.6.1: wait for more reports rather than fail.
 			if (leader!.bucketReportCount(merged) < task.minBatchSize)
 				return undefined;
 			// Another job may have collected part of this interval meanwhile.
@@ -457,7 +460,7 @@ export async function createAggregator(
 				id,
 			);
 		if (reply.status >= 400 && reply.status < 500) {
-			// DAP 19, 4.6.1: fail the collection job with the Helper's error.
+			// DAP 20, 4.6.1: fail the collection job with the Helper's error.
 			let type = "about:blank";
 			try {
 				type = String(JSON.parse(new TextDecoder().decode(body)).type ?? type);
@@ -488,13 +491,13 @@ export async function createAggregator(
 			transaction(() => {
 				if (one("SELECT 1 FROM collections WHERE id=?", jobId)) return;
 				if (
-					// DAP 19, 4.6.1: only collected buckets conflict. Pending jobs
+					// DAP 20, 4.6.1: only collected buckets conflict. Pending jobs
 					// may overlap, so a collector can widen an interval that is
 					// still short of the minimum batch.
 					one(
 						"SELECT 1 FROM collections WHERE collected=1 AND start<? AND end>? LIMIT 1",
-						job.interval.end,
-						job.interval.start,
+						job.interval!.end,
+						job.interval!.start,
 					)
 				)
 					throw new DAPError(
@@ -506,8 +509,8 @@ export async function createAggregator(
 					"INSERT INTO collections(id,request,start,end,collected,response) VALUES (?,?,?,?,0,NULL)",
 					jobId,
 					body,
-					job.interval.start,
-					job.interval.end,
+					job.interval!.start,
+					job.interval!.end,
 				);
 			});
 		}
@@ -597,7 +600,7 @@ export async function createAggregator(
 		if (saved?.response)
 			return dap(bytes(saved.response), "aggregate-share", 200, { location });
 		const job = helper!.aggregateShare(body);
-		const { start, end } = job.interval;
+		const { start, end } = job.interval!;
 		const merged = helper!.mergeBuckets(
 			q("SELECT bucket FROM buckets WHERE time>=? AND time<?", start, end).map(
 				(row) => bytes(row.bucket),
@@ -666,7 +669,7 @@ export async function createAggregator(
 		if (method === "OPTIONS" && publicPath)
 			return new Response(null, { status: 204, headers: cors });
 		if (method === "GET" && pathname === "/hpke_config")
-			// DAP 19, 4.4.1: clients should cache the list.
+			// DAP 20, 4.4.1: clients should cache the list.
 			return new Response(hpkeConfigs, {
 				headers: {
 					...cors,
@@ -701,7 +704,7 @@ export async function createAggregator(
 			method === "DELETE" &&
 			pathname.startsWith(`${base}collection_jobs/`)
 		) {
-			// DAP 19, 4.6.3: a collector abandons a job. A collected batch
+			// DAP 20, 4.6.3: a collector abandons a job. A collected batch
 			// stays collected; a pending job is forgotten.
 			await authenticate(request, options.token);
 			q(
@@ -777,7 +780,7 @@ export async function createAggregator(
 				if (error instanceof HttpError)
 					return new Response(error.message, { status: error.status });
 				if (!(error instanceof DAPError)) console.error(error);
-				// DAP 19, 3.6: problem details; unexpected errors stay opaque.
+				// DAP 20, 3.6: problem details; unexpected errors stay opaque.
 				return problemResponse(error, task.id);
 			}
 		},

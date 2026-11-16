@@ -4,6 +4,11 @@ Notable changes to Sinbad, following [Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+### Changed
+
+- Require @thibmeu/dap 0.2.0, which speaks DAP draft 20. DAP 19 aggregators cannot decrypt its reports, so upgrade clients and both aggregators together.
+- Aggregators refuse leader-selected tasks; their storage keys batches by report time.
+
 ### Fixed
 
 - The Leader splits aggregation jobs that would exceed the Helper's 1 MiB request limit, instead of losing their reports.

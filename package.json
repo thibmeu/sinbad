@@ -58,11 +58,11 @@
     "bench:count": "node bench/count.ts"
   },
   "peerDependencies": {
-    "@thibmeu/dap": "^0.1.0"
+    "@thibmeu/dap": "^0.2.0"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.13",
-    "@thibmeu/dap": "0.1.0",
+    "@thibmeu/dap": "0.2.0",
     "@types/node": "26.6.3",
     "esbuild": "0.28.2",
     "typescript": "7.0.2",

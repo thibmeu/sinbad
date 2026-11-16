@@ -115,7 +115,7 @@ function uploader(
 				result.rejected[0]?.error === "hpke-unknown-config-id" ? [index] : [],
 			);
 			if (stale.length) {
-				// DAP 19, 4.4.2.2: drop the cached lists, retry the affected reports
+				// DAP 20, 4.4.2.2: drop the cached lists, retry the affected reports
 				// once with fresh ones, then give up. Each keeps its original time,
 				// so a retry never moves an event into another batch bucket.
 				const fresh = await client(true);
@@ -300,7 +300,11 @@ export async function createSiteAnalytics(
 	// then costs no round trips, and one unreachable Aggregator affects only
 	// the tasks that use it.
 	const lists = new Map<string, Promise<HpkeConfigList>>();
-	const list = (aggregator: string, version: 18 | 19, refresh: boolean) => {
+	const list = (
+		aggregator: string,
+		version: Task["dapVersion"],
+		refresh: boolean,
+	) => {
 		if (refresh) lists.delete(aggregator);
 		let pending = lists.get(aggregator);
 		if (!pending) {
